@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bybit Trading Interface</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Bybit Trading</h1>
+        <p class="subtitle">Simple Buy/Sell Order Interface</p>
+
+        <div class="info-box">
+            ⚠️ Configure your API credentials and symbol before trading
+        </div>
+
+        <div class="config-section">
+            <div class="config-title">API Configuration</div>
+            
+            <div class="input-group">
+                <label>API Key</label>
+                <input type="text" id="apiKey" placeholder="Enter your Bybit API Key" value="17zh99GGpf1ohf3m4J">
+            </div>
+
+            <div class="input-group">
+                <label>API Secret</label>
+                <input type="password" id="apiSecret" placeholder="Enter your Bybit API Secret" value="N6r0GEfc1MVC6lazHb5jECpCeH7zeYQrwrMT">
+            </div>
+
+            <div class="input-group">
+                <label>Trading Symbol</label>
+                <input type="text" id="symbol" value="BTCUSDT" placeholder="e.g., BTCUSDT">
+            </div>
+
+            <div class="input-group">
+                <label>Category</label>
+                <select id="category">
+                    <option value="linear">Linear (USDT Perpetual)</option>
+                    <option value="spot">Spot</option>
+                    <option value="inverse">Inverse</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="input-group">
+            <label>Order Type</label>
+            <select id="orderType">
+                <option value="Market">Market Order</option>
+                <option value="Limit">Limit Order</option>
+            </select>
+        </div>
+
+        <div class="input-group">
+            <label>Quantity</label>
+            <input type="number" id="qty" placeholder="e.g., 0.001" step="0.001">
+        </div>
+
+        <div class="input-group" id="priceGroup" style="display: none;">
+            <label>Price</label>
+            <input type="number" id="price" placeholder="e.g., 50000" step="0.01">
+        </div>
+
+        <div class="button-group">
+            <button class="buy-btn">
+                <span id="buyText">Buy Market</span>
+            </button>
+            <button class="sell-btn">
+                <span id="sellText">Sell Market</span>
+            </button>
+        </div>
+
+        <div class="response" id="response"></div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
