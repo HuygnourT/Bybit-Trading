@@ -3,6 +3,7 @@ const path = require('path');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 require('dotenv').config();
+const { RestClientV5 } = require('bybit-api');
 
 const bybitService = require('./services/bybitService');
 
@@ -40,6 +41,34 @@ app.post('/api/order/create', async (req, res) => {
       orderType,
       qty,
       price
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+// API endpoint to get wallet balance
+app.post('/api/wallet/balance', async (req, res) => {
+  console.log("Calling wallet from server.js");
+  try {
+    const { apiKey, apiSecret, accountType } = req.body;
+
+    if (!apiKey || !apiSecret || !accountType) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required parameters' 
+      });
+    }
+
+    const result = await bybitService.getWalletBalance({
+      apiKey,
+      apiSecret,
+      accountType
     });
 
     res.json(result);

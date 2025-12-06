@@ -20,12 +20,12 @@
             
             <div class="input-group">
                 <label>API Key</label>
-                <input type="text" id="apiKey" placeholder="Enter your Bybit API Key" value="17zh99GGpf1ohf3m4J">
+                <input type="text" id="apiKey" placeholder="Enter your Bybit API Key" value="YSkSHv9J6BZGO7FG8A">
             </div>
 
             <div class="input-group">
                 <label>API Secret</label>
-                <input type="password" id="apiSecret" placeholder="Enter your Bybit API Secret" value="N6r0GEfc1MVC6lazHb5jECpCeH7zeYQrwrMT">
+                <input type="password" id="apiSecret" placeholder="Enter your Bybit API Secret" value="UhuN1Sm3rf8RqF7oo5yNGhYG4cc0Pw0cE0oR">
             </div>
 
             <div class="input-group">
@@ -41,6 +41,12 @@
                     <option value="inverse">Inverse</option>
                 </select>
             </div>
+
+            <button class="balance-btn" id="balanceBtn">
+                💰 Check USDT Balance
+            </button>
+
+            <div class="balance-display" id="balanceDisplay"></div>
         </div>
 
         <div class="input-group">
@@ -62,10 +68,10 @@
         </div>
 
         <div class="button-group">
-            <button class="buy-btn">
+            <button class="buy-btn" id="buyBtn">
                 <span id="buyText">Buy Market</span>
             </button>
-            <button class="sell-btn">
+            <button class="sell-btn" id="sellBtn">
                 <span id="sellText">Sell Market</span>
             </button>
         </div>

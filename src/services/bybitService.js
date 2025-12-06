@@ -1,7 +1,7 @@
 const crypto = require('../utils/crypto');
 const https = require('https');
 
-const BYBIT_API_URL = 'api.bybit.com';
+const BYBIT_API_URL = 'api-testnet.bybit.com';
 
 async function createOrder({ apiKey, apiSecret, category, symbol, side, orderType, qty, price }) {
   const timestamp = Date.now().toString();
@@ -73,6 +73,67 @@ async function createOrder({ apiKey, apiSecret, category, symbol, side, orderTyp
   });
 }
 
+async function getWalletBalance({ apiKey, apiSecret, accountType }) {
+  const timestamp = Date.now().toString();
+  const recvWindow = '5000';
+  console.log("Calling wallet from bybitService.js");
+  // Query parameters for GET request
+  const queryString = `accountType=${accountType}`;
+  const paramStr = timestamp + apiKey + recvWindow + queryString;
+  const signature = crypto.createSignature(paramStr, apiSecret);
+
+  const options = {
+    hostname: BYBIT_API_URL,
+    path: `/v5/account/wallet-balance?${queryString}`,
+    //path: `/v5/asset/transfer/query-account-coins-balance`,
+    accountType: accountType,
+    method: 'GET',
+    headers: {
+      'X-BAPI-API-KEY': apiKey,
+      'X-BAPI-SIGN': signature,
+      'X-BAPI-TIMESTAMP': timestamp,
+      'X-BAPI-RECV-WINDOW': recvWindow
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = '';
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const response = JSON.parse(data);
+          if (response.retCode === 0) {
+            resolve({
+              success: true,
+              data: response.result
+            });
+          } else {
+            resolve({
+              success: false,
+              message: response.retMsg,
+              code: response.retCode
+            });
+          }
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      reject(error);
+    });
+
+    req.end();
+  });
+}
+
 module.exports = {
-  createOrder
+  createOrder,
+  getWalletBalance  
 };
