@@ -458,7 +458,7 @@ class ArbitrageBot {
             if (existingLayers.includes(layer)) continue;
             
             // Calculate price for this layer
-            const offsetTicks = this.config.buyTickOffset + (layer * this.config.layerSpacing);
+            const offsetTicks = this.config.offsetTicks + (layer * this.config.layerStepTicks);
             let buyPrice = bestBid - (offsetTicks * this.config.tickSize);
             //buyPrice = Math.round(buyPrice / this.config.tickSize) * this.config.tickSize;
             
@@ -471,10 +471,10 @@ class ArbitrageBot {
                 // Price conflict detected
                 const conflictOrder = this.activeBuyOrders[conflictIndex];
                 
-                // Adjust new price UP by layerSpacing to make it unique (closer to best bid)
-                const adjustment = this.config.layerSpacing * this.config.tickSize;
+                // Adjust new price UP by layerStepTicks to make it unique (closer to best bid)
+                const adjustment = this.config.layerStepTicks * this.config.tickSize;
                 buyPrice = buyPrice + adjustment;
-                buyPrice = Math.round(buyPrice / this.config.tickSize) * this.config.tickSize;
+                //buyPrice = Math.round(buyPrice / this.config.tickSize) * this.config.tickSize;
                 
                 this.log(`Layer ${layer} price conflict with Layer ${conflictOrder.layer}, adjusted UP to ${buyPrice}`, 'warning');
                 
@@ -490,51 +490,37 @@ class ArbitrageBot {
                 
                 // Switch layers: new higher price becomes Layer 0, old lower price becomes Layer 1
                 if (layer < conflictOrder.layer) {
-                    // New order should be Layer 0 (higher price), existing should be Layer 1 (lower price)
-                    // But existing has lower layer number, so we need to switch
                     this.log(`Switching layers: New order @ ${buyPrice} → Layer ${layer}, Old order @ ${conflictOrder.price} → Layer ${layer + 1}`, 'info');
                     conflictOrder.layer = layer + 1;
                 } else if (buyPrice > conflictOrder.price) {
-                    // New price is higher, it should have lower layer number
                     this.log(`Switching layers: New order @ ${buyPrice} → Layer ${conflictOrder.layer}, Old order @ ${conflictOrder.price} → Layer ${layer}`, 'info');
                     const oldLayer = conflictOrder.layer;
                     conflictOrder.layer = layer;
-                    // The new order will use oldLayer (which is lower, meaning closer to best bid)
-                    // But we continue with current layer variable for creating the order
                 }
             }
             
             // Add this price to existingPrices to prevent conflicts with next layers in this loop
             existingPrices.push(buyPrice);
 
-            for (let layer = 0; layer < this.config.maxBuyOrders; layer++) {
-                if (existingLayers.includes(layer)) {
-                    continue;
-                }
+            // Create the buy order
+            this.log(`Creating BUY order at ${buyPrice} (layer ${layer})`, 'info');
 
-                const price = this.calculateLayerPrice(bestBid, layer);
-                // const roundedPrice = this.roundToTick(price);
-                const roundedPrice = (price);
+            const orderId = await this.placeLimitOrder('Buy', buyPrice, this.config.orderQty);
+            
+            if (orderId) {
+                this.stats.totalBuyOrdersCreated++;
+                this.activeBuyOrders.push({
+                    orderId: orderId,
+                    price: buyPrice,
+                    qty: this.config.orderQty,
+                    filledQty: 0,
+                    timestamp: Date.now(),
+                    layer: layer
+                });
+            }
 
-                this.log(`Creating BUY order at ${roundedPrice} (layer ${layer})`, 'info');
-
-                const orderId = await this.placeLimitOrder('Buy', roundedPrice, this.config.orderQty);
-                
-                if (orderId) {
-                    this.stats.totalBuyOrdersCreated++;
-                    this.activeBuyOrders.push({
-                        orderId: orderId,
-                        price: roundedPrice,
-                        qty: this.config.orderQty,
-                        filledQty: 0,
-                        timestamp: Date.now(),
-                        layer: layer
-                    });
-                }
-
-                if (this.activeBuyOrders.length >= this.config.maxBuyOrders) {
-                    break;
-                }
+            if (this.activeBuyOrders.length >= this.config.maxBuyOrders) {
+                break;
             }
         }
     }
@@ -672,7 +658,7 @@ class ArbitrageBot {
                 let orderStatus = order.orderStatus;
                 let cumExecQty = parseFloat(order.cumExecQty || 0);
                 
-                this.log(`Order ${orderId} status: ${orderStatus}, filled: ${cumExecQty}`, 'info');
+                //this.log(`Order ${orderId} status: ${orderStatus}, filled: ${cumExecQty}`, 'info');
                 
                 const result = {
                     filled: orderStatus === 'Filled',
@@ -936,6 +922,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const pauseBtn = document.getElementById('pauseArbBtn');
     const resumeBtn = document.getElementById('resumeArbBtn');
     const testOrderBtn = document.getElementById('testOrderBtn');
+    const clearStatsBtn = document.getElementById('clearStatsBtn');
+
+    // Function to update clear stats button state
+    function updateClearStatsBtn() {
+        if (clearStatsBtn) {
+            clearStatsBtn.disabled = arbitrageBot.isRunning || arbitrageBot.isPaused;
+        }
+    }
 
     if (startBtn) {
         startBtn.addEventListener('click', async function() {
@@ -945,6 +939,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
+            // Auto-clear stats when starting bot
+            arbitrageBot.resetStats();
+            arbitrageBot.log('📊 Statistics cleared on bot start', 'info');
+
             arbitrageBot.init(config);
             await arbitrageBot.start();
 
@@ -952,6 +950,7 @@ document.addEventListener('DOMContentLoaded', function() {
             pauseBtn.style.display = 'block';
             stopBtn.style.display = 'block';
             resumeBtn.style.display = 'none';
+            updateClearStatsBtn();
         });
     }
 
@@ -963,6 +962,7 @@ document.addEventListener('DOMContentLoaded', function() {
             stopBtn.style.display = 'none';
             pauseBtn.style.display = 'none';
             resumeBtn.style.display = 'none';
+            updateClearStatsBtn();
         });
     }
 
@@ -972,6 +972,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             pauseBtn.style.display = 'none';
             resumeBtn.style.display = 'block';
+            updateClearStatsBtn();
         });
     }
 
@@ -981,6 +982,20 @@ document.addEventListener('DOMContentLoaded', function() {
             
             resumeBtn.style.display = 'none';
             pauseBtn.style.display = 'block';
+            updateClearStatsBtn();
+        });
+    }
+
+    if (clearStatsBtn) {
+        clearStatsBtn.addEventListener('click', function() {
+            if (arbitrageBot.isRunning || arbitrageBot.isPaused) {
+                arbitrageBot.log('⚠️ Cannot clear stats while bot is running', 'warning');
+                return;
+            }
+            
+            arbitrageBot.resetStats();
+            arbitrageBot.updateStatus('stopped');
+            arbitrageBot.log('🗑️ Statistics cleared', 'info');
         });
     }
 

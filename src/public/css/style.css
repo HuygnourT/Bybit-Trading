@@ -313,6 +313,29 @@ button {
     box-shadow: 0 5px 15px rgba(245, 158, 11, 0.3);
 }
 
+.clear-stats-btn {
+    flex: 0.5;
+    background: #6b7280;
+    color: white;
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 12px;
+}
+
+.clear-stats-btn:hover {
+    background: #4b5563;
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(107, 114, 128, 0.3);
+}
+
+.clear-stats-btn:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+    opacity: 0.6;
+}
+
 /* Enhanced Bot Status Styles */
 .arb-status {
     background: white;
