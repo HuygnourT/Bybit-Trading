@@ -1,7 +1,7 @@
-// Arbitrage Trading Bot Module
-// Implements Maker-Based Arbitrage Strategy
+// Scalping Trading Bot Module
+// Implements Maker-Based Scalping Strategy
 
-class ArbitrageBot {
+class ScalpingBot {
     constructor() {
         this.isRunning = false;
         this.isPaused = false;  // New: Paused state (no new buys, but TP orders still monitored)
@@ -95,7 +95,7 @@ class ArbitrageBot {
         return totalQty;
     }
 
-    // Start the arbitrage bot
+    // Start the scalping bot
     async start() {
         if (this.isRunning) {
             this.log('Bot is already running', 'warning');
@@ -250,7 +250,7 @@ class ArbitrageBot {
         }
     }
 
-    // Stop the arbitrage bot
+    // Stop the scalping bot
     async stop() {
         if (!this.isRunning) {
             return;
@@ -297,7 +297,7 @@ class ArbitrageBot {
         this.log('▶️ Bot resumed - Will create new buy orders...', 'success');
     }
 
-    // Main arbitrage loop
+    // Main scalping loop
     async runMainLoop() {
         if (!this.isRunning) return;
 
@@ -913,9 +913,9 @@ class ArbitrageBot {
 }
 
 // Global bot instance
-const arbitrageBot = new ArbitrageBot();
+const scalpingBot = new ScalpingBot();
 
-// Initialize arbitrage UI handlers
+// Initialize scalping UI handlers
 document.addEventListener('DOMContentLoaded', function() {
     const startBtn = document.getElementById('startArbBtn');
     const stopBtn = document.getElementById('stopArbBtn');
@@ -927,24 +927,24 @@ document.addEventListener('DOMContentLoaded', function() {
     // Function to update clear stats button state
     function updateClearStatsBtn() {
         if (clearStatsBtn) {
-            clearStatsBtn.disabled = arbitrageBot.isRunning || arbitrageBot.isPaused;
+            clearStatsBtn.disabled = scalpingBot.isRunning || scalpingBot.isPaused;
         }
     }
 
     if (startBtn) {
         startBtn.addEventListener('click', async function() {
-            const config = getArbitrageConfig();
+            const config = getScalpingConfig();
             
             if (!validateConfig(config)) {
                 return;
             }
 
             // Auto-clear stats when starting bot
-            arbitrageBot.resetStats();
-            arbitrageBot.log('📊 Statistics cleared on bot start', 'info');
+            scalpingBot.resetStats();
+            scalpingBot.log('📊 Statistics cleared on bot start', 'info');
 
-            arbitrageBot.init(config);
-            await arbitrageBot.start();
+            scalpingBot.init(config);
+            await scalpingBot.start();
 
             startBtn.style.display = 'none';
             pauseBtn.style.display = 'block';
@@ -956,7 +956,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (stopBtn) {
         stopBtn.addEventListener('click', async function() {
-            await arbitrageBot.stop();
+            await scalpingBot.stop();
             
             startBtn.style.display = 'block';
             stopBtn.style.display = 'none';
@@ -968,7 +968,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (pauseBtn) {
         pauseBtn.addEventListener('click', async function() {
-            await arbitrageBot.pause();
+            await scalpingBot.pause();
             
             pauseBtn.style.display = 'none';
             resumeBtn.style.display = 'block';
@@ -978,7 +978,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (resumeBtn) {
         resumeBtn.addEventListener('click', async function() {
-            await arbitrageBot.resume();
+            await scalpingBot.resume();
             
             resumeBtn.style.display = 'none';
             pauseBtn.style.display = 'block';
@@ -988,33 +988,33 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (clearStatsBtn) {
         clearStatsBtn.addEventListener('click', function() {
-            if (arbitrageBot.isRunning || arbitrageBot.isPaused) {
-                arbitrageBot.log('⚠️ Cannot clear stats while bot is running', 'warning');
+            if (scalpingBot.isRunning || scalpingBot.isPaused) {
+                scalpingBot.log('⚠️ Cannot clear stats while bot is running', 'warning');
                 return;
             }
             
-            arbitrageBot.resetStats();
-            arbitrageBot.updateStatus('stopped');
-            arbitrageBot.log('🗑️ Statistics cleared', 'info');
+            scalpingBot.resetStats();
+            scalpingBot.updateStatus('stopped');
+            scalpingBot.log('🗑️ Statistics cleared', 'info');
         });
     }
 
     if (testOrderBtn) {
         testOrderBtn.addEventListener('click', async function() {
-            const config = getArbitrageConfig();
+            const config = getScalpingConfig();
             
             if (!validateConfig(config)) {
                 return;
             }
 
-            arbitrageBot.init(config);
-            await arbitrageBot.testSingleOrder();
+            scalpingBot.init(config);
+            await scalpingBot.testSingleOrder();
         });
     }
 });
 
 // Get configuration from UI
-function getArbitrageConfig() {
+function getScalpingConfig() {
     return {
         apiKey: document.getElementById('apiKey').value.trim(),
         apiSecret: document.getElementById('apiSecret').value.trim(),
