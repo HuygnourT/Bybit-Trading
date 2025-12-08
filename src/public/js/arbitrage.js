@@ -4,10 +4,12 @@
 class ArbitrageBot {
     constructor() {
         this.isRunning = false;
+        this.isPaused = false;  // New: Paused state (no new buys, but TP orders still monitored)
         this.config = {};
         this.activeBuyOrders = [];
         this.activeSellTPOrders = [];
         this.loopInterval = null;
+        this.lastBuyFillTime = 0;  // Track when last buy was filled (for wait delay)
         
         // Enhanced statistics tracking
         this.stats = {
@@ -36,6 +38,7 @@ class ArbitrageBot {
         this.resetStats();
         this.log('Bot initialized with config', 'info');
         this.log(`Symbol: ${config.symbol}, Tick Size: ${config.tickSize}`, 'info');
+        this.log(`Wait After Buy Fill: ${config.waitAfterBuyFill}ms`, 'info');
     }
 
     // Reset statistics
@@ -198,6 +201,10 @@ class ArbitrageBot {
                         this.log(`✅ Buy order filled at ${roundedBuyPrice}!`, 'success');
                         this.log(`Order filled in ${elapsedSeconds}s (repricing attempt #${repricingAttempts})`, 'success');
                         
+                        // Record fill time for buy order delay
+                        this.lastBuyFillTime = Date.now();
+                        
+                        // Create TP immediately (no wait)
                         this.log('Creating take-profit order...', 'info');
                         await this.createSellTPOrder(roundedBuyPrice, this.config.orderQty);
                         
@@ -250,11 +257,44 @@ class ArbitrageBot {
         }
 
         this.isRunning = false;
+        this.isPaused = false;
         clearTimeout(this.loopInterval);
         this.updateStatus('stopped');
         this.log('⏹️ Bot stopped', 'warning');
 
         await this.cancelAllOrders();
+    }
+
+    // Pause the bot - cancel buy orders but keep TP orders
+    async pause() {
+        if (!this.isRunning || this.isPaused) {
+            return;
+        }
+
+        this.isPaused = true;
+        this.log('⏸️ Bot paused - Canceling buy orders, keeping TP orders...', 'warning');
+
+        // Cancel all active buy orders
+        for (const order of this.activeBuyOrders) {
+            await this.cancelOrder(order.orderId);
+            this.stats.totalBuyOrdersCanceled++;
+            this.log(`Canceled buy order ${order.orderId}`, 'info');
+        }
+        this.activeBuyOrders = [];
+
+        this.updateStatus('paused');
+        this.log(`⏸️ Bot paused. ${this.activeSellTPOrders.length} TP orders still active.`, 'warning');
+    }
+
+    // Resume the bot from paused state
+    async resume() {
+        if (!this.isRunning || !this.isPaused) {
+            return;
+        }
+
+        this.isPaused = false;
+        this.updateStatus('running');
+        this.log('▶️ Bot resumed - Will create new buy orders...', 'success');
     }
 
     // Main arbitrage loop
@@ -270,8 +310,15 @@ class ArbitrageBot {
 
                 this.log(`Orderbook: Bid=${bestBid}, Ask=${bestAsk}`, 'info');
 
-                await this.updateBuyOrders(bestBid);
-                await this.createBuyOrders(bestBid);
+                // Only manage buy orders if not paused
+                if (!this.isPaused) {
+                    await this.updateBuyOrders(bestBid);
+                    await this.createBuyOrders(bestBid);
+                } else {
+                    this.log('⏸️ Paused - Skipping buy order management', 'info');
+                }
+                
+                // Always monitor TP orders (even when paused)
                 await this.updateSellTPOrders();
             }
 
@@ -279,7 +326,7 @@ class ArbitrageBot {
             this.log(`Loop error: ${error.message}`, 'error');
         }
 
-        this.updateStatus('running');
+        this.updateStatus(this.isPaused ? 'paused' : 'running');
 
         this.loopInterval = setTimeout(() => {
             this.runMainLoop();
@@ -328,6 +375,11 @@ class ArbitrageBot {
             if (status.filled) {
                 this.log(`✅ Buy order ${order.orderId} filled at ${order.price}`, 'success');
                 this.stats.totalBuyOrdersFilled++;
+                
+                // Record fill time for buy order delay
+                this.lastBuyFillTime = Date.now();
+                
+                // Create TP immediately (no wait)
                 await this.createSellTPOrder(order.price, order.qty);
                 ordersToRemove.push(i);
                 continue;
@@ -342,6 +394,11 @@ class ArbitrageBot {
                 
                 if (order.filledQty > 0) {
                     this.stats.totalBuyOrdersFilled++;
+                    
+                    // Record fill time for buy order delay
+                    this.lastBuyFillTime = Date.now();
+                    
+                    // Create TP immediately (no wait)
                     await this.createSellTPOrder(order.price, order.filledQty);
                 }
                 
@@ -355,6 +412,11 @@ class ArbitrageBot {
                 if (order.filledQty > 0) {
                     this.log(`Creating TP for partial fill before repricing`, 'success');
                     this.stats.totalBuyOrdersFilled++;
+                    
+                    // Record fill time for buy order delay
+                    this.lastBuyFillTime = Date.now();
+                    
+                    // Create TP immediately (no wait)
                     await this.createSellTPOrder(order.price, order.filledQty);
                 }
 
@@ -376,6 +438,16 @@ class ArbitrageBot {
         const needed = this.config.maxBuyOrders - this.activeBuyOrders.length;
         
         if (needed <= 0) return;
+
+        // Check if we need to wait after last buy fill
+        if (this.config.waitAfterBuyFill > 0 && this.lastBuyFillTime > 0) {
+            const timeSinceLastFill = Date.now() - this.lastBuyFillTime;
+            if (timeSinceLastFill < this.config.waitAfterBuyFill) {
+                const remainingWait = this.config.waitAfterBuyFill - timeSinceLastFill;
+                this.log(`⏱️ Waiting ${remainingWait}ms before creating new buy orders...`, 'info');
+                return; // Skip this cycle, will create on next loop
+            }
+        }
 
         const existingLayers = this.activeBuyOrders.map(order => order.layer);
 
@@ -617,8 +689,13 @@ class ArbitrageBot {
     updateStatus(status) {
         const statusEl = document.getElementById('arbStatus');
         
-        if (status === 'running') {
+        if (status === 'running' || status === 'paused') {
             statusEl.classList.add('running');
+            if (status === 'paused') {
+                statusEl.classList.add('paused');
+            } else {
+                statusEl.classList.remove('paused');
+            }
             
             // Calculate statistics
             let estimatedProfit = this.calculateEstimatedProfit();
@@ -633,11 +710,14 @@ class ArbitrageBot {
                 return prefix + formatted;
             };
             
+            const statusText = status === 'paused' ? 'Bot Paused (TP Active)' : 'Bot Running';
+            const statusColor = status === 'paused' ? '#8b5cf6' : '#10b981';
+            
             statusEl.innerHTML = `
                 <div class="status-running">
-                    <div class="status-header-main">
-                        <span class="status-dot"></span>
-                        <span class="status-text">Bot Running</span>
+                    <div class="status-header-main" style="background: linear-gradient(135deg, ${statusColor}, ${status === 'paused' ? '#7c3aed' : '#059669'});">
+                        <span class="status-dot" style="${status === 'paused' ? 'animation: none; background: #fbbf24;' : ''}"></span>
+                        <span class="status-text">${statusText}</span>
                     </div>
                     
                     <div class="stats-grid">
@@ -697,10 +777,10 @@ class ArbitrageBot {
                     </div>
                     
                     <div class="orders-section">
-                        <div class="orders-panel">
+                        <div class="orders-panel" style="${status === 'paused' ? 'opacity: 0.5;' : ''}">
                             <div class="panel-header">
-                                <span class="panel-icon">🟢</span>
-                                <span class="panel-title">Active Buy Orders (${this.activeBuyOrders.length}/${this.config.maxBuyOrders})</span>
+                                <span class="panel-icon">${status === 'paused' ? '⏸️' : '🟢'}</span>
+                                <span class="panel-title">Active Buy Orders (${this.activeBuyOrders.length}/${this.config.maxBuyOrders}) ${status === 'paused' ? '- PAUSED' : ''}</span>
                             </div>
                             <div class="orders-list">
                                 ${this.activeBuyOrders.length > 0 ? 
@@ -712,7 +792,7 @@ class ArbitrageBot {
                                             <span class="order-age">${Math.floor((Date.now() - order.timestamp) / 1000)}s</span>
                                         </div>
                                     `).join('') : 
-                                    '<div class="no-orders">No active buy orders</div>'
+                                    `<div class="no-orders">${status === 'paused' ? 'Buy orders paused' : 'No active buy orders'}</div>`
                                 }
                             </div>
                         </div>
@@ -796,6 +876,8 @@ const arbitrageBot = new ArbitrageBot();
 document.addEventListener('DOMContentLoaded', function() {
     const startBtn = document.getElementById('startArbBtn');
     const stopBtn = document.getElementById('stopArbBtn');
+    const pauseBtn = document.getElementById('pauseArbBtn');
+    const resumeBtn = document.getElementById('resumeArbBtn');
     const testOrderBtn = document.getElementById('testOrderBtn');
 
     if (startBtn) {
@@ -810,7 +892,9 @@ document.addEventListener('DOMContentLoaded', function() {
             await arbitrageBot.start();
 
             startBtn.style.display = 'none';
+            pauseBtn.style.display = 'block';
             stopBtn.style.display = 'block';
+            resumeBtn.style.display = 'none';
         });
     }
 
@@ -820,6 +904,26 @@ document.addEventListener('DOMContentLoaded', function() {
             
             startBtn.style.display = 'block';
             stopBtn.style.display = 'none';
+            pauseBtn.style.display = 'none';
+            resumeBtn.style.display = 'none';
+        });
+    }
+
+    if (pauseBtn) {
+        pauseBtn.addEventListener('click', async function() {
+            await arbitrageBot.pause();
+            
+            pauseBtn.style.display = 'none';
+            resumeBtn.style.display = 'block';
+        });
+    }
+
+    if (resumeBtn) {
+        resumeBtn.addEventListener('click', async function() {
+            await arbitrageBot.resume();
+            
+            resumeBtn.style.display = 'none';
+            pauseBtn.style.display = 'block';
         });
     }
 
@@ -853,7 +957,8 @@ function getArbitrageConfig() {
         tpTicks: parseInt(document.getElementById('arbTPTicks').value),
         maxSellTPOrders: parseInt(document.getElementById('arbMaxSellTPOrders').value),
         orderQty: parseFloat(document.getElementById('arbOrderQty').value),
-        loopInterval: parseInt(document.getElementById('arbLoopInterval').value)
+        loopInterval: parseInt(document.getElementById('arbLoopInterval').value),
+        waitAfterBuyFill: parseInt(document.getElementById('arbWaitAfterBuyFill').value) || 0
     };
 }
 
