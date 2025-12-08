@@ -9,10 +9,20 @@
 <body>
     <div class="container">
         <h1>🚀 Bybit Trading</h1>
-        <p class="subtitle">Simple Buy/Sell Order Interface</p>
+        <p class="subtitle">Advanced Trading & Arbitrage Platform</p>
 
         <div class="info-box">
             ⚠️ Configure your API credentials and symbol before trading
+        </div>
+
+        <!-- Trading Mode Switch -->
+        <div class="mode-switch">
+            <button class="mode-btn active" id="singleModeBtn" data-mode="single">
+                📊 Single Order
+            </button>
+            <button class="mode-btn" id="arbitrageModeBtn" data-mode="arbitrage">
+                🤖 Arbitrage Trading
+            </button>
         </div>
 
         <div class="config-section">
@@ -30,15 +40,15 @@
 
             <div class="input-group">
                 <label>Trading Symbol</label>
-                <input type="text" id="symbol" value="BTCUSDT" placeholder="e.g., BTCUSDT">
+                <input type="text" id="symbol" value="XRPUSDT" placeholder="e.g., BTCUSDT">
             </div>
 
-            <div class="input-group">
+            <div class="input-group" id="categoryGroup">
                 <label>Category</label>
                 <select id="category">
-                    <option value="linear">Linear (USDT Perpetual)</option>
+                    <!-- <option value="linear">Linear (USDT Perpetual)</option> -->
                     <option value="spot">Spot</option>
-                    <option value="inverse">Inverse</option>
+                    <!-- <option value="inverse">Inverse</option> -->
                 </select>
             </div>
 
@@ -49,36 +59,123 @@
             <div class="balance-display" id="balanceDisplay"></div>
         </div>
 
-        <div class="input-group">
-            <label>Order Type</label>
-            <select id="orderType">
-                <option value="Market">Market Order</option>
-                <option value="Limit">Limit Order</option>
-            </select>
+        <!-- Single Order Mode -->
+        <div id="singleOrderMode" class="trading-mode active">
+            <div class="input-group">
+                <label>Order Type</label>
+                <select id="orderType">
+                    <option value="Market">Market Order</option>
+                    <option value="Limit">Limit Order</option>
+                </select>
+            </div>
+
+            <div class="input-group">
+                <label>Quantity</label>
+                <input type="number" id="qty" placeholder="e.g., 0.001" step="0.001">
+            </div>
+
+            <div class="input-group" id="priceGroup" style="display: none;">
+                <label>Price</label>
+                <input type="number" id="price" placeholder="e.g., 50000" step="0.01">
+            </div>
+
+            <div class="button-group">
+                <button class="buy-btn" id="buyBtn">
+                    <span id="buyText">Buy Market</span>
+                </button>
+                <button class="sell-btn" id="sellBtn">
+                    <span id="sellText">Sell Market</span>
+                </button>
+            </div>
         </div>
 
-        <div class="input-group">
-            <label>Quantity</label>
-            <input type="number" id="qty" placeholder="e.g., 0.001" step="0.001">
-        </div>
+        <!-- Arbitrage Mode -->
+        <div id="arbitrageMode" class="trading-mode" style="display: none;">
+            <div class="arb-config-section">
+                <h3>🤖 Arbitrage Configuration</h3>
+                
+                <div class="arb-grid">
+                    <div class="input-group">
+                        <label>Tick Size</label>
+                        <input type="number" id="arbTickSize" value="0.000001" step="0.01" placeholder="0.01">
+                    </div>
 
-        <div class="input-group" id="priceGroup" style="display: none;">
-            <label>Price</label>
-            <input type="number" id="price" placeholder="e.g., 50000" step="0.01">
-        </div>
+                    <div class="input-group">
+                        <label>Max Buy Orders</label>
+                        <input type="number" id="arbMaxBuyOrders" value="3" min="1" max="10">
+                    </div>
 
-        <div class="button-group">
-            <button class="buy-btn" id="buyBtn">
-                <span id="buyText">Buy Market</span>
-            </button>
-            <button class="sell-btn" id="sellBtn">
-                <span id="sellText">Sell Market</span>
-            </button>
+                    <div class="input-group">
+                        <label>Offset Ticks</label>
+                        <input type="number" id="arbOffsetTicks" value="0" min="-5" max="5">
+                    </div>
+
+                    <div class="input-group">
+                        <label>Layer Step Ticks</label>
+                        <input type="number" id="arbLayerStepTicks" value="2" min="1" max="10">
+                    </div>
+
+                    <div class="input-group">
+                        <label>Buy TTL (seconds)</label>
+                        <input type="number" id="arbBuyTTL" value="30" min="5" max="300">
+                    </div>
+
+                    <div class="input-group">
+                        <label>Reprice Ticks</label>
+                        <input type="number" id="arbRepriceTicks" value="3" min="1" max="10">
+                    </div>
+
+                    <div class="input-group">
+                        <label>Take Profit Ticks</label>
+                        <input type="number" id="arbTPTicks" value="10" min="1" max="20">
+                    </div>
+
+                    <div class="input-group">
+                        <label>Max Sell TP Orders</label>
+                        <input type="number" id="arbMaxSellTPOrders" value="20" min="1" max="200">
+                    </div>
+
+                    <div class="input-group">
+                        <label>Order Quantity</label>
+                        <input type="number" id="arbOrderQty" value="10" step="0.001" placeholder="0.001">
+                    </div>
+
+                    <div class="input-group">
+                        <label>Loop Interval (ms)</label>
+                        <input type="number" id="arbLoopInterval" value="500" min="100" max="5000" step="100">
+                    </div>
+                </div>
+
+                <div class="arb-controls">
+                    <button class="start-arb-btn" id="startArbBtn">
+                        ▶️ Start Arbitrage Bot
+                    </button>
+                    <button class="stop-arb-btn" id="stopArbBtn" style="display: none;">
+                        ⏹️ Stop Bot
+                    </button>
+                    <button class="test-order-btn" id="testOrderBtn">
+                        🧪 Test Single Order
+                    </button>
+
+                </div>
+
+                <div class="arb-status" id="arbStatus">
+                    <div class="status-header">🔴 Bot Status: Stopped</div>
+                </div>
+
+                <div class="arb-logs" id="arbLogs">
+                    <div class="logs-header">📋 Activity Logs</div>
+                    <div class="logs-content" id="logsContent">
+                        <div class="log-item info">Bot ready. Configure parameters and click Start.</div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="response" id="response"></div>
     </div>
 
     <script src="js/app.js"></script>
+    <script src="js/arbitrage.js"></script>
 </body>
 </html>

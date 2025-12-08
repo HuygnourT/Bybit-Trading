@@ -1,6 +1,9 @@
 // Wait for DOM to be fully loaded
 document.addEventListener('DOMContentLoaded', function() {
     console.log('✅ App.js loaded successfully');
+
+     // Mode switching
+    setupModeSwitch();
     
     // Get all elements
     const orderTypeSelect = document.getElementById('orderType');
@@ -60,6 +63,48 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+// Setup mode switching between Single Order and Arbitrage
+function setupModeSwitch() {
+    const singleModeBtn = document.getElementById('singleModeBtn');
+    const arbitrageModeBtn = document.getElementById('arbitrageModeBtn');
+    const singleOrderMode = document.getElementById('singleOrderMode');
+    const arbitrageMode = document.getElementById('arbitrageMode');
+
+    singleModeBtn.addEventListener('click', function() {
+        // Switch to Single Order mode
+        singleModeBtn.classList.add('active');
+        arbitrageModeBtn.classList.remove('active');
+        singleOrderMode.classList.add('active');
+        singleOrderMode.style.display = 'block';
+        arbitrageMode.classList.remove('active');
+        arbitrageMode.style.display = 'none';
+
+        // Show category selection
+        if (categoryGroup) {
+            categoryGroup.style.display = 'block';
+        }
+        
+        console.log('Switched to Single Order mode');
+    });
+
+    arbitrageModeBtn.addEventListener('click', function() {
+        // Switch to Arbitrage mode
+        arbitrageModeBtn.classList.add('active');
+        singleModeBtn.classList.remove('active');
+        arbitrageMode.classList.add('active');
+        arbitrageMode.style.display = 'block';
+        singleOrderMode.classList.remove('active');
+        singleOrderMode.style.display = 'none';
+
+        // Hide category selection
+        if (categoryGroup) {
+            categoryGroup.style.display = 'none';
+        }
+        
+        console.log('Switched to Arbitrage mode');
+    });
+}
 
 // Check USDT Balance Function
 async function checkBalance() {

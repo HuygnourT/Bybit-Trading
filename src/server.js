@@ -80,6 +80,90 @@ app.post('/api/wallet/balance', async (req, res) => {
   }
 });
 
+// API endpoint to get orderbook
+app.post('/api/orderbook', async (req, res) => {
+  try {
+    const { symbol, category } = req.body;
+
+    if (!symbol || !category) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required parameters' 
+      });
+    }
+
+    const result = await bybitService.getOrderbook({
+      symbol,
+      category
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+// API endpoint to check order status
+app.post('/api/order/status', async (req, res) => {
+  try {
+    const { apiKey, apiSecret, category, symbol, orderId } = req.body;
+
+    if (!apiKey || !apiSecret || !category || !symbol || !orderId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required parameters' 
+      });
+    }
+
+    const result = await bybitService.getOrderStatus({
+      apiKey,
+      apiSecret,
+      category,
+      symbol,
+      orderId
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+// API endpoint to cancel order
+app.post('/api/order/cancel', async (req, res) => {
+  try {
+    const { apiKey, apiSecret, category, symbol, orderId } = req.body;
+
+    if (!apiKey || !apiSecret || !category || !symbol || !orderId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required parameters' 
+      });
+    }
+
+    const result = await bybitService.cancelOrder({
+      apiKey,
+      apiSecret,
+      category,
+      symbol,
+      orderId
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
