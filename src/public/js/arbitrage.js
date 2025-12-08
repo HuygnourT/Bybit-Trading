@@ -8,19 +8,88 @@ class ArbitrageBot {
         this.activeBuyOrders = [];
         this.activeSellTPOrders = [];
         this.loopInterval = null;
+        
+        // Enhanced statistics tracking
         this.stats = {
-            totalBuys: 0,
-            totalSells: 0,
-            totalProfit: 0,
-            totalFees: 0
+            // Buy order stats
+            totalBuyOrdersCreated: 0,
+            totalBuyOrdersFilled: 0,
+            totalBuyOrdersCanceled: 0,
+            
+            // Sell order stats
+            totalSellOrdersCreated: 0,
+            totalSellOrdersFilled: 0,
+            totalSellOrdersCanceled: 0,
+            
+            // Profit tracking
+            realProfit: 0,           // Profit from completed sell orders
+            totalFees: 0,
+            
+            // For avg price calculation
+            pendingPositions: []      // Track buy orders with pending sell TP
         };
     }
 
     // Initialize bot with configuration
     init(config) {
         this.config = config;
+        this.resetStats();
         this.log('Bot initialized with config', 'info');
         this.log(`Symbol: ${config.symbol}, Tick Size: ${config.tickSize}`, 'info');
+    }
+
+    // Reset statistics
+    resetStats() {
+        this.stats = {
+            totalBuyOrdersCreated: 0,
+            totalBuyOrdersFilled: 0,
+            totalBuyOrdersCanceled: 0,
+            totalSellOrdersCreated: 0,
+            totalSellOrdersFilled: 0,
+            totalSellOrdersCanceled: 0,
+            realProfit: 0,
+            totalFees: 0,
+            pendingPositions: []
+        };
+    }
+
+    // Calculate estimated profit (pending + completed)
+    calculateEstimatedProfit() {
+        let estimatedProfit = this.stats.realProfit;
+        
+        // Add potential profit from pending sell TP orders
+        for (let order of this.activeSellTPOrders) {
+            let potentialProfit = (order.price - order.buyPrice) * order.qty;
+            estimatedProfit += potentialProfit;
+        }
+        
+        return estimatedProfit;
+    }
+
+    // Calculate average buy price for positions with pending sell orders
+    calculateAvgBuyPrice() {
+        if (this.stats.pendingPositions.length === 0) {
+            return 0;
+        }
+        
+        let totalValue = 0;
+        let totalQty = 0;
+        
+        for (let position of this.stats.pendingPositions) {
+            totalValue += position.buyPrice * position.qty;
+            totalQty += position.qty;
+        }
+        
+        return totalQty > 0 ? totalValue / totalQty : 0;
+    }
+
+    // Calculate total pending quantity
+    calculateTotalPendingQty() {
+        let totalQty = 0;
+        for (let position of this.stats.pendingPositions) {
+            totalQty += position.qty;
+        }
+        return totalQty;
     }
 
     // Start the arbitrage bot
@@ -45,7 +114,7 @@ class ArbitrageBot {
         let currentOrderId = null;
         let orderFilled = false;
         let repricingAttempts = 0;
-        const maxRepricingAttempts = 10; // Maximum repricing attempts
+        const maxRepricingAttempts = 10;
         
         try {
             while (!orderFilled && repricingAttempts < maxRepricingAttempts) {
@@ -55,39 +124,37 @@ class ArbitrageBot {
                     this.log(`🔄 Repricing attempt #${repricingAttempts}/${maxRepricingAttempts}`, 'warning');
                 }
                 
-                // 1. Fetch fresh orderbook
                 const orderbook = await this.fetchOrderbook();
                 
                 if (!orderbook) {
                     this.log('❌ Failed to fetch orderbook', 'error');
-                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s before retry
+                    await new Promise(resolve => setTimeout(resolve, 2000));
                     continue;
                 }
 
                 const bestBid = orderbook.bestBid;
                 this.log(`Best Bid: ${bestBid}`, 'info');
 
-                // 2. Calculate buy price at offset ticks
                 const buyPrice = this.calculateLayerPrice(bestBid, 0);
-                const roundedBuyPrice = buyPrice;//.roundToTick(buyPrice);
+                const roundedBuyPrice = buyPrice;
                 
                 this.log(`Buy price calculated: ${roundedBuyPrice} (offset: ${this.config.offsetTicks} ticks)`, 'info');
 
-                // 3. Place buy order
                 this.log(`Placing BUY order at ${roundedBuyPrice} for ${this.config.orderQty}...`, 'info');
                 currentOrderId = await this.placeLimitOrder('Buy', roundedBuyPrice, this.config.orderQty);
                 
                 if (!currentOrderId) {
                     this.log('❌ Failed to place buy order, retrying...', 'error');
-                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s before retry
+                    await new Promise(resolve => setTimeout(resolve, 2000));
                     continue;
                 }
 
+                this.stats.totalBuyOrdersCreated++;
                 this.log(`✅ Buy order placed: ${currentOrderId}`, 'success');
+                this.updateStatus('running');
 
-                // 4. Monitor this order
-                const checkInterval = 2000; // Check every 2 seconds
-                const maxTime = this.config.buyTTL * 1000; // Convert TTL to milliseconds
+                const checkInterval = 2000;
+                const maxTime = this.config.buyTTL * 1000;
                 const maxAttempts = Math.ceil(maxTime / checkInterval);
                 
                 this.log(`📊 Monitoring order (TTL: ${this.config.buyTTL}s, repricing threshold: ${this.config.repriceTicks} ticks)`, 'info');
@@ -104,7 +171,6 @@ class ArbitrageBot {
                     
                     this.log(`Check ${attempts}/${maxAttempts}: Checking order status (elapsed: ${elapsedSeconds}s/${this.config.buyTTL}s)...`, 'info');
                     
-                    // Fetch fresh orderbook for repricing check
                     const currentOrderbook = await this.fetchOrderbook();
                     if (currentOrderbook) {
                         const currentBestBid = currentOrderbook.bestBid;
@@ -127,24 +193,22 @@ class ArbitrageBot {
 
                     if (status.filled) {
                         orderFilled = true;
+                        this.stats.totalBuyOrdersFilled++;
                         
                         this.log(`✅ Buy order filled at ${roundedBuyPrice}!`, 'success');
                         this.log(`Order filled in ${elapsedSeconds}s (repricing attempt #${repricingAttempts})`, 'success');
                         
-                        // 5. Create TP order
                         this.log('Creating take-profit order...', 'info');
                         await this.createSellTPOrder(roundedBuyPrice, this.config.orderQty);
                         
+                        this.updateStatus('running');
                         this.log('🎉 Test completed successfully!', 'success');
                         break;
                     } else if (status.partiallyFilled) {
                         this.log(`Partially filled: ${status.filledQty}/${this.config.orderQty}`, 'info');
-                    } else {
-                        //this.log(`Order status: ${status.orderStatus}`, 'info');
                     }
                 }
 
-                // Check if we need to cancel and reprice
                 if (shouldReprice || (attempts >= maxAttempts && !orderFilled)) {
                     if (shouldReprice) {
                         this.log('Canceling order for repricing...', 'warning');
@@ -153,9 +217,10 @@ class ArbitrageBot {
                     }
                     
                     await this.cancelOrder(currentOrderId);
+                    this.stats.totalBuyOrdersCanceled++;
                     this.log('Order canceled. Will create new order with fresh price...', 'info');
+                    this.updateStatus('running');
                     
-                    // Wait a bit before repricing
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             }
@@ -173,10 +238,10 @@ class ArbitrageBot {
             if (currentOrderId) {
                 this.log('Attempting to cancel order due to error...', 'warning');
                 await this.cancelOrder(currentOrderId);
+                this.stats.totalBuyOrdersCanceled++;
             }
         }
     }
-
 
     // Stop the arbitrage bot
     async stop() {
@@ -189,7 +254,6 @@ class ArbitrageBot {
         this.updateStatus('stopped');
         this.log('⏹️ Bot stopped', 'warning');
 
-        // Cancel all active orders
         await this.cancelAllOrders();
     }
 
@@ -198,7 +262,6 @@ class ArbitrageBot {
         if (!this.isRunning) return;
 
         try {
-            // 1. Fetch orderbook
             const orderbook = await this.fetchOrderbook();
             
             if (orderbook) {
@@ -207,13 +270,8 @@ class ArbitrageBot {
 
                 this.log(`Orderbook: Bid=${bestBid}, Ask=${bestAsk}`, 'info');
 
-                // 2. Update existing BUY orders
                 await this.updateBuyOrders(bestBid);
-
-                // 3. Create new BUY orders if needed
                 await this.createBuyOrders(bestBid);
-
-                // 4. Update SELL TP orders
                 await this.updateSellTPOrders();
             }
 
@@ -221,10 +279,8 @@ class ArbitrageBot {
             this.log(`Loop error: ${error.message}`, 'error');
         }
 
-        // ⭐ NEW: Update status display with current orders
         this.updateStatus('running');
 
-        // Schedule next iteration
         this.loopInterval = setTimeout(() => {
             this.runMainLoop();
         }, this.config.loopInterval);
@@ -256,69 +312,60 @@ class ArbitrageBot {
             this.log(`Failed to fetch orderbook: ${error.message}`, 'error');
             return null;
         }
-
-        console.log("fetchOrderbook Completed");
     }
 
     // Update existing BUY orders (TTL and repricing)
     async updateBuyOrders(bestBid) {
-        var now = Date.now();
-        var ordersToRemove = [];
+        let now = Date.now();
+        let ordersToRemove = [];
         
         for (let i = 0; i < this.activeBuyOrders.length; i++) {
             let order = this.activeBuyOrders[i];
-            let age = (now - order.timestamp) / 1000; // seconds
+            let age = (now - order.timestamp) / 1000;
 
-            // Check order status first
             let status = await this.checkOrderStatus(order.orderId);
-            
-            //console.log(`Check order ${order.orderId} ${status.filledQty} ${status.filled} ${status.partiallyFilled}`);
 
             if (status.filled) {
                 this.log(`✅ Buy order ${order.orderId} filled at ${order.price}`, 'success');
-                this.stats.totalBuys++;
+                this.stats.totalBuyOrdersFilled++;
                 await this.createSellTPOrder(order.price, order.qty);
-                console.log(`Removed order ${order.orderId} after fill`);
                 ordersToRemove.push(i);
                 continue;
             } else if (status.partiallyFilled) {
                 order.filledQty = status.filledQty;
             }
 
-            // Check TTL
             if (age >= this.config.buyTTL) {
                 this.log(`Order ${order.orderId} expired (TTL: ${age.toFixed(1)}s)`, 'warning');
                 await this.cancelOrder(order.orderId);
+                this.stats.totalBuyOrdersCanceled++;
                 
-                // If partially filled, create TP order
                 if (order.filledQty > 0) {
+                    this.stats.totalBuyOrdersFilled++;
                     await this.createSellTPOrder(order.price, order.filledQty);
                 }
                 
                 ordersToRemove.push(i);
-                console.log(`Removed order ${order.orderId} after time out`);
                 continue;
             }
 
-            // Check if needs repricing
             const tickDiff = Math.abs(order.price - bestBid) / this.config.tickSize;
-
             
             if (tickDiff >= this.config.repriceTicks) {
-                // ⭐ FIX: If partially filled, create TP first
                 if (order.filledQty > 0) {
                     this.log(`Creating TP for partial fill before repricing`, 'success');
+                    this.stats.totalBuyOrdersFilled++;
                     await this.createSellTPOrder(order.price, order.filledQty);
                 }
 
                 this.log(`Repricing order ${order.orderId} (diff: ${tickDiff.toFixed(1)} ticks)`, 'info');                
                 await this.cancelOrder(order.orderId);
+                this.stats.totalBuyOrdersCanceled++;
                 ordersToRemove.push(i);
                 continue;
             }
         }
 
-        // Remove processed orders
         for (let i = ordersToRemove.length - 1; i >= 0; i--) {
             this.activeBuyOrders.splice(ordersToRemove[i], 1);
         }
@@ -330,23 +377,23 @@ class ArbitrageBot {
         
         if (needed <= 0) return;
 
-        // Get existing layers to avoid duplicates
         const existingLayers = this.activeBuyOrders.map(order => order.layer);
 
         for (let layer = 0; layer < this.config.maxBuyOrders; layer++) {
-            // Skip if this layer already has an order
             if (existingLayers.includes(layer)) {
                 continue;
             }
 
             const price = this.calculateLayerPrice(bestBid, layer);
-            const roundedPrice = this.roundToTick(price);
+            // const roundedPrice = this.roundToTick(price);
+            const roundedPrice = (price);
 
             this.log(`Creating BUY order at ${roundedPrice} (layer ${layer})`, 'info');
 
             const orderId = await this.placeLimitOrder('Buy', roundedPrice, this.config.orderQty);
             
             if (orderId) {
+                this.stats.totalBuyOrdersCreated++;
                 this.activeBuyOrders.push({
                     orderId: orderId,
                     price: roundedPrice,
@@ -357,7 +404,6 @@ class ArbitrageBot {
                 });
             }
 
-            // Stop if we've created enough orders
             if (this.activeBuyOrders.length >= this.config.maxBuyOrders) {
                 break;
             }
@@ -383,19 +429,32 @@ class ArbitrageBot {
             return;
         }
 
-        const tpPrice = this.roundToTick(buyPrice + (this.config.tpTicks * this.config.tickSize));
+        //const tpPrice = this.roundToTick(buyPrice + (this.config.tpTicks * this.config.tickSize));
+        const tpPrice = (buyPrice + (this.config.tpTicks * this.config.tickSize));
         
         this.log(`Creating SELL TP at ${tpPrice} for ${qty} (profit: ${this.config.tpTicks} ticks)`, 'success');
 
         const orderId = await this.placeLimitOrder('Sell', tpPrice, qty);
         
         if (orderId) {
-            this.activeSellTPOrders.push({
+            this.stats.totalSellOrdersCreated++;
+            
+            const newOrder = {
                 orderId: orderId,
                 price: tpPrice,
                 qty: qty,
                 buyPrice: buyPrice,
                 timestamp: Date.now()
+            };
+            
+            this.activeSellTPOrders.push(newOrder);
+            
+            // Add to pending positions for avg price calculation
+            this.stats.pendingPositions.push({
+                orderId: orderId,
+                buyPrice: buyPrice,
+                qty: qty,
+                sellPrice: tpPrice
             });
         }
     }
@@ -411,15 +470,20 @@ class ArbitrageBot {
             
             if (status.filled) {
                 const profit = (order.price - order.buyPrice) * order.qty;
-                this.stats.totalSells++;
-                this.stats.totalProfit += profit;
+                this.stats.totalSellOrdersFilled++;
+                this.stats.realProfit += profit;
                 
-                this.log(`💰 TP order ${order.orderId} filled! Profit: ${profit.toFixed(4)} USDT`, 'success');
+                // Remove from pending positions
+                const pendingIndex = this.stats.pendingPositions.findIndex(p => p.orderId === order.orderId);
+                if (pendingIndex !== -1) {
+                    this.stats.pendingPositions.splice(pendingIndex, 1);
+                }
+                
+                this.log(`💰 TP order ${order.orderId} filled! Profit: ${profit.toFixed(6)} USDT`, 'success');
                 ordersToRemove.push(i);
             }
         }
 
-        // Remove filled orders
         for (let i = ordersToRemove.length - 1; i >= 0; i--) {
             this.activeSellTPOrders.splice(ordersToRemove[i], 1);
         }
@@ -473,26 +537,20 @@ class ArbitrageBot {
             });
 
             const data = await response.json();
-
-            // ⭐ NEW: Log API response
-            //this.log(`API Response: ${JSON.stringify(data)}`, 'info');
             
             if (data.success && data.data && data.data.list && data.data.list.length > 0) {                
-                let order = data.data.list[0];  // ✅ Get first order from list
-                let orderStatus = order.orderStatus;  // ✅ Correct path!
-                let cumExecQty = parseFloat(order.cumExecQty || 0);  // ✅ Correct path!
+                let order = data.data.list[0];
+                let orderStatus = order.orderStatus;
+                let cumExecQty = parseFloat(order.cumExecQty || 0);
                 
                 this.log(`Order ${orderId} status: ${orderStatus}, filled: ${cumExecQty}`, 'info');
                 
-                // ⭐ NEW: Store result before returning
                 const result = {
                     filled: orderStatus === 'Filled',
                     partiallyFilled: orderStatus === 'PartiallyFilled',
                     filledQty: cumExecQty
                 };
                 
-                // ⭐ NEW: Log return value
-                //this.log(`Returning result: ${JSON.stringify(result)}`, 'info');
                 return result;
             }
 
@@ -535,63 +593,183 @@ class ArbitrageBot {
     async cancelAllOrders() {
         this.log('Canceling all active orders...', 'warning');
         
-        const allOrders = [...this.activeBuyOrders, ...this.activeSellTPOrders];
-        
-        for (const order of allOrders) {
+        for (const order of this.activeBuyOrders) {
             await this.cancelOrder(order.orderId);
+            this.stats.totalBuyOrdersCanceled++;
+        }
+        
+        for (const order of this.activeSellTPOrders) {
+            await this.cancelOrder(order.orderId);
+            this.stats.totalSellOrdersCanceled++;
+            
+            // Remove from pending positions
+            const pendingIndex = this.stats.pendingPositions.findIndex(p => p.orderId === order.orderId);
+            if (pendingIndex !== -1) {
+                this.stats.pendingPositions.splice(pendingIndex, 1);
+            }
         }
 
         this.activeBuyOrders = [];
         this.activeSellTPOrders = [];
     }
 
-    // Update status display
+    // Update status display with enhanced UI
     updateStatus(status) {
         const statusEl = document.getElementById('arbStatus');
         
         if (status === 'running') {
             statusEl.classList.add('running');
-
-            // ⭐ NEW: Build order details
-            let buyOrdersHTML = '';
-            buyOrdersHTML += 'Active Buy Orders:';
             
-            // ⭐ NEW: Loop through buy orders and display details
-            if (this.activeBuyOrders.length > 0) {
-                this.activeBuyOrders.forEach(order => {
-                    buyOrdersHTML += `• Layer ${order.layer}: ${order.price} | Qty: ${order.qty} | Age: ${Math.floor((Date.now() - order.timestamp) / 1000)}s`;
-                });
-            } else {
-                buyOrdersHTML += '• No active buy orders';
-            }
+            // Calculate statistics
+            let estimatedProfit = this.calculateEstimatedProfit();
+            let avgBuyPrice = this.calculateAvgBuyPrice();
+            let totalPendingQty = this.calculateTotalPendingQty();
             
-            buyOrdersHTML += 'Active TP Orders:';
-            
-            // ⭐ NEW: Loop through TP orders and display details
-            if (this.activeSellTPOrders.length > 0) {
-                this.activeSellTPOrders.forEach(order => {
-                    buyOrdersHTML += `• Price: ${order.price} | Qty: ${order.qty} | Profit: ${((order.price - order.buyPrice) * order.qty).toFixed(6)}`;
-                });
-            } else {
-                buyOrdersHTML += '• No active TP orders';
-            }
-            
-            buyOrdersHTML += '';
+            // Format numbers for display
+            let formatPrice = (price) => price > 0 ? price.toFixed(6) : '-';
+            let formatProfit = (profit) => {
+                let formatted = profit.toFixed(6);
+                let prefix = profit >= 0 ? '+' : '';
+                return prefix + formatted;
+            };
             
             statusEl.innerHTML = `
-                🟢 Bot Status: Running
-                
-                    Buy Orders: ${this.activeBuyOrders.length}/${this.config.maxBuyOrders} |
-                    TP Orders: ${this.activeSellTPOrders.length}/${this.config.maxSellTPOrders} |
-                    Total Buys: ${this.stats.totalBuys} | 
-                    Total Sells: ${this.stats.totalSells} | 
-                    Profit: ${this.stats.totalProfit.toFixed(6)} USDT
-                
-                ${buyOrdersHTML}
+                <div class="status-running">
+                    <div class="status-header-main">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Bot Running</span>
+                    </div>
+                    
+                    <div class="stats-grid">
+                        <div class="stat-card buy-stats">
+                            <div class="stat-icon">📥</div>
+                            <div class="stat-content">
+                                <div class="stat-label">Buy Orders</div>
+                                <div class="stat-value">${this.stats.totalBuyOrdersFilled} <span class="stat-total">/ ${this.stats.totalBuyOrdersCreated}</span></div>
+                                <div class="stat-detail">Filled / Created</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card sell-stats">
+                            <div class="stat-icon">📤</div>
+                            <div class="stat-content">
+                                <div class="stat-label">Sell Orders</div>
+                                <div class="stat-value">${this.stats.totalSellOrdersFilled} <span class="stat-total">/ ${this.stats.totalSellOrdersCreated}</span></div>
+                                <div class="stat-detail">Filled / Created</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card profit-estimated">
+                            <div class="stat-icon">📊</div>
+                            <div class="stat-content">
+                                <div class="stat-label">Estimated Profit</div>
+                                <div class="stat-value ${estimatedProfit >= 0 ? 'positive' : 'negative'}">${formatProfit(estimatedProfit)} USDT</div>
+                                <div class="stat-detail">Pending + Completed</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card profit-real">
+                            <div class="stat-icon">💰</div>
+                            <div class="stat-content">
+                                <div class="stat-label">Real Profit</div>
+                                <div class="stat-value ${this.stats.realProfit >= 0 ? 'positive' : 'negative'}">${formatProfit(this.stats.realProfit)} USDT</div>
+                                <div class="stat-detail">Completed Only</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card avg-price">
+                            <div class="stat-icon">⚖️</div>
+                            <div class="stat-content">
+                                <div class="stat-label">Avg Buy Price</div>
+                                <div class="stat-value">${formatPrice(avgBuyPrice)}</div>
+                                <div class="stat-detail">Qty: ${totalPendingQty.toFixed(4)}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-card active-orders">
+                            <div class="stat-icon">📋</div>
+                            <div class="stat-content">
+                                <div class="stat-label">Active Orders</div>
+                                <div class="stat-value">${this.activeBuyOrders.length + this.activeSellTPOrders.length}</div>
+                                <div class="stat-detail">Buy: ${this.activeBuyOrders.length} | TP: ${this.activeSellTPOrders.length}</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="orders-section">
+                        <div class="orders-panel">
+                            <div class="panel-header">
+                                <span class="panel-icon">🟢</span>
+                                <span class="panel-title">Active Buy Orders (${this.activeBuyOrders.length}/${this.config.maxBuyOrders})</span>
+                            </div>
+                            <div class="orders-list">
+                                ${this.activeBuyOrders.length > 0 ? 
+                                    this.activeBuyOrders.map(order => `
+                                        <div class="order-item buy-order">
+                                            <span class="order-layer">L${order.layer}</span>
+                                            <span class="order-price">${order.price.toFixed(6)}</span>
+                                            <span class="order-qty">${order.qty}</span>
+                                            <span class="order-age">${Math.floor((Date.now() - order.timestamp) / 1000)}s</span>
+                                        </div>
+                                    `).join('') : 
+                                    '<div class="no-orders">No active buy orders</div>'
+                                }
+                            </div>
+                        </div>
+                        
+                        <div class="orders-panel">
+                            <div class="panel-header">
+                                <span class="panel-icon">🔵</span>
+                                <span class="panel-title">Active TP Orders (${this.activeSellTPOrders.length}/${this.config.maxSellTPOrders})</span>
+                            </div>
+                            <div class="orders-list">
+                                ${this.activeSellTPOrders.length > 0 ? 
+                                    this.activeSellTPOrders.map(order => {
+                                        const potentialProfit = (order.price - order.buyPrice) * order.qty;
+                                        return `
+                                            <div class="order-item tp-order">
+                                                <span class="order-price">${order.price.toFixed(6)}</span>
+                                                <span class="order-qty">${order.qty}</span>
+                                                <span class="order-profit">+${potentialProfit.toFixed(6)}</span>
+                                            </div>
+                                        `;
+                                    }).join('') : 
+                                    '<div class="no-orders">No active TP orders</div>'
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
             `;
         } else {
             statusEl.classList.remove('running');
-            statusEl.innerHTML = '<div class="status-header">🔴 Bot Status: Stopped</div>';
+            
+            // Show final stats when stopped
+            const estimatedProfit = this.calculateEstimatedProfit();
+            
+            statusEl.innerHTML = `
+                <div class="status-stopped">
+                    <div class="status-header-main stopped">
+                        <span class="status-dot stopped"></span>
+                        <span class="status-text">Bot Stopped</span>
+                    </div>
+                    
+                    <div class="final-stats">
+                        <div class="final-stat">
+                            <span class="final-label">Total Buy Orders:</span>
+                            <span class="final-value">${this.stats.totalBuyOrdersFilled} / ${this.stats.totalBuyOrdersCreated} (${this.stats.totalBuyOrdersCanceled} canceled)</span>
+                        </div>
+                        <div class="final-stat">
+                            <span class="final-label">Total Sell Orders:</span>
+                            <span class="final-value">${this.stats.totalSellOrdersFilled} / ${this.stats.totalSellOrdersCreated} (${this.stats.totalSellOrdersCanceled} canceled)</span>
+                        </div>
+                        <div class="final-stat">
+                            <span class="final-label">Real Profit:</span>
+                            <span class="final-value ${this.stats.realProfit >= 0 ? 'positive' : 'negative'}">${this.stats.realProfit >= 0 ? '+' : ''}${this.stats.realProfit.toFixed(6)} USDT</span>
+                        </div>
+                    </div>
+                </div>
+            `;
         }
     }
 
@@ -605,22 +783,20 @@ class ArbitrageBot {
         
         logsContent.insertBefore(logItem, logsContent.firstChild);
         
-        // Keep only last 100 logs
         while (logsContent.children.length > 100) {
             logsContent.removeChild(logsContent.lastChild);
         }
-
-        //console.log(`[ARB ${type.toUpperCase()}]`, message);
     }
 }
 
 // Global bot instance
-var arbitrageBot = new ArbitrageBot();
+const arbitrageBot = new ArbitrageBot();
 
 // Initialize arbitrage UI handlers
 document.addEventListener('DOMContentLoaded', function() {
     const startBtn = document.getElementById('startArbBtn');
     const stopBtn = document.getElementById('stopArbBtn');
+    const testOrderBtn = document.getElementById('testOrderBtn');
 
     if (startBtn) {
         startBtn.addEventListener('click', async function() {
