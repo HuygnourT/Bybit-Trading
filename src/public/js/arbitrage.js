@@ -450,34 +450,91 @@ class ArbitrageBot {
         }
 
         const existingLayers = this.activeBuyOrders.map(order => order.layer);
+        
+        // Get all existing buy order prices to avoid duplicates
+        const existingPrices = this.activeBuyOrders.map(order => order.price);
 
         for (let layer = 0; layer < this.config.maxBuyOrders; layer++) {
-            if (existingLayers.includes(layer)) {
-                continue;
-            }
-
-            const price = this.calculateLayerPrice(bestBid, layer);
-            // const roundedPrice = this.roundToTick(price);
-            const roundedPrice = (price);
-
-            this.log(`Creating BUY order at ${roundedPrice} (layer ${layer})`, 'info');
-
-            const orderId = await this.placeLimitOrder('Buy', roundedPrice, this.config.orderQty);
+            if (existingLayers.includes(layer)) continue;
             
-            if (orderId) {
-                this.stats.totalBuyOrdersCreated++;
-                this.activeBuyOrders.push({
-                    orderId: orderId,
-                    price: roundedPrice,
-                    qty: this.config.orderQty,
-                    filledQty: 0,
-                    timestamp: Date.now(),
-                    layer: layer
-                });
+            // Calculate price for this layer
+            const offsetTicks = this.config.buyTickOffset + (layer * this.config.layerSpacing);
+            let buyPrice = bestBid - (offsetTicks * this.config.tickSize);
+            //buyPrice = Math.round(buyPrice / this.config.tickSize) * this.config.tickSize;
+            
+            // Check if this price already exists in active orders
+            const conflictIndex = this.activeBuyOrders.findIndex(order => 
+                Math.abs(order.price - buyPrice) < this.config.tickSize * 0.5
+            );
+            
+            if (conflictIndex !== -1) {
+                // Price conflict detected
+                const conflictOrder = this.activeBuyOrders[conflictIndex];
+                
+                // Adjust new price UP by layerSpacing to make it unique (closer to best bid)
+                const adjustment = this.config.layerSpacing * this.config.tickSize;
+                buyPrice = buyPrice + adjustment;
+                buyPrice = Math.round(buyPrice / this.config.tickSize) * this.config.tickSize;
+                
+                this.log(`Layer ${layer} price conflict with Layer ${conflictOrder.layer}, adjusted UP to ${buyPrice}`, 'warning');
+                
+                // Check again after adjustment
+                const stillConflicts = existingPrices.some(existingPrice => 
+                    Math.abs(existingPrice - buyPrice) < this.config.tickSize * 0.5
+                );
+                
+                if (stillConflicts) {
+                    this.log(`Layer ${layer} still has price conflict, skipping`, 'warning');
+                    continue;
+                }
+                
+                // Switch layers: new higher price becomes Layer 0, old lower price becomes Layer 1
+                if (layer < conflictOrder.layer) {
+                    // New order should be Layer 0 (higher price), existing should be Layer 1 (lower price)
+                    // But existing has lower layer number, so we need to switch
+                    this.log(`Switching layers: New order @ ${buyPrice} → Layer ${layer}, Old order @ ${conflictOrder.price} → Layer ${layer + 1}`, 'info');
+                    conflictOrder.layer = layer + 1;
+                } else if (buyPrice > conflictOrder.price) {
+                    // New price is higher, it should have lower layer number
+                    this.log(`Switching layers: New order @ ${buyPrice} → Layer ${conflictOrder.layer}, Old order @ ${conflictOrder.price} → Layer ${layer}`, 'info');
+                    const oldLayer = conflictOrder.layer;
+                    conflictOrder.layer = layer;
+                    // The new order will use oldLayer (which is lower, meaning closer to best bid)
+                    // But we continue with current layer variable for creating the order
+                }
             }
+            
+            // Add this price to existingPrices to prevent conflicts with next layers in this loop
+            existingPrices.push(buyPrice);
 
-            if (this.activeBuyOrders.length >= this.config.maxBuyOrders) {
-                break;
+            for (let layer = 0; layer < this.config.maxBuyOrders; layer++) {
+                if (existingLayers.includes(layer)) {
+                    continue;
+                }
+
+                const price = this.calculateLayerPrice(bestBid, layer);
+                // const roundedPrice = this.roundToTick(price);
+                const roundedPrice = (price);
+
+                this.log(`Creating BUY order at ${roundedPrice} (layer ${layer})`, 'info');
+
+                const orderId = await this.placeLimitOrder('Buy', roundedPrice, this.config.orderQty);
+                
+                if (orderId) {
+                    this.stats.totalBuyOrdersCreated++;
+                    this.activeBuyOrders.push({
+                        orderId: orderId,
+                        price: roundedPrice,
+                        qty: this.config.orderQty,
+                        filledQty: 0,
+                        timestamp: Date.now(),
+                        layer: layer
+                    });
+                }
+
+                if (this.activeBuyOrders.length >= this.config.maxBuyOrders) {
+                    break;
+                }
             }
         }
     }
