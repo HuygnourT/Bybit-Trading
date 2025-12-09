@@ -705,8 +705,8 @@ class ScalpingBot {
         return layerPrice;
     }
 
-    	// Round price to tick size
-    	roundToTick(price) {
+    // Round price to tick size
+    roundToTick(price) {
         const tickSize = this.config.tickSize;
         // Calculate decimal places from tick size
         const tickStr = tickSize.toString();
@@ -825,6 +825,7 @@ class ScalpingBot {
         
         try {
             const status = await this.checkOrderStatus(this.pendingMarketSell.orderId);
+            const elapsed = (Date.now() - this.pendingMarketSell.timestamp) / 1000;
             
             if (status.filled) {
                 // Get current price for P/L calculation (approximate)
@@ -875,12 +876,114 @@ class ScalpingBot {
                 this.pendingNewTP = null;
                 this.log(`▶️ Resuming buy orders...`, 'success');
                 
+            } else if (status.partiallyFilled) {
+                // Partial fill - keep waiting but log progress
+                this.log(`⏳ Market sell partially filled: ${status.filledQty}/${this.pendingMarketSell.qty} (${elapsed.toFixed(1)}s)`, 'warning');
+                
             } else {
-                const elapsed = ((Date.now() - this.pendingMarketSell.timestamp) / 1000).toFixed(1);
-                this.log(`⏳ Waiting for market sell to fill... (${elapsed}s)`, 'info');
+                // Not filled yet
+                const MARKET_SELL_TIMEOUT = 30; // seconds
+                
+                if (elapsed > MARKET_SELL_TIMEOUT) {
+                    // Timeout! Cancel and convert to limit sell at current bid
+                    this.log(`⚠️ Market sell timeout (${elapsed.toFixed(1)}s)! Converting to limit sell...`, 'error');
+                    
+                    // Try to cancel the market order (may fail if already filled)
+                    await this.cancelOrder(this.pendingMarketSell.orderId);
+                    
+                    // Get current bid price and place limit sell
+                    const orderbook = await this.fetchOrderbook();
+                    if (orderbook) {
+                        const limitPrice = this.roundToTick(orderbook.bestBid);
+                        this.log(`📝 Placing limit sell @ ${limitPrice} (current bid)`, 'warning');
+                        
+                        const newOrderId = await this.placeLimitOrder('Sell', limitPrice, this.pendingMarketSell.qty);
+                        
+                        if (newOrderId) {
+                            // Update pending market sell to track the new limit order
+                            this.pendingMarketSell.orderId = newOrderId;
+                            this.pendingMarketSell.timestamp = Date.now();
+                            this.pendingMarketSell.isLimitFallback = true;
+                            this.pendingMarketSell.limitPrice = limitPrice;
+                            this.log(`📤 Fallback limit sell placed: ${newOrderId}`, 'info');
+                        } else {
+                            // Failed to place limit order - resume anyway to avoid getting stuck
+                            this.log(`❌ Failed to place fallback limit sell! Resuming without it...`, 'error');
+                            this.isWaitingForMarketSell = false;
+                            this.pendingMarketSell = null;
+                            // Still create pending TP
+                            if (this.pendingNewTP) {
+                                await this.createFallbackTP();
+                            }
+                            this.pendingNewTP = null;
+                        }
+                    }
+                } else if (this.pendingMarketSell.isLimitFallback) {
+                    // We're now tracking a limit order fallback
+                    const limitElapsed = elapsed;
+                    const LIMIT_REPRICE_THRESHOLD = 10; // seconds
+                    
+                    if (limitElapsed > LIMIT_REPRICE_THRESHOLD) {
+                        // Reprice the limit sell to current bid
+                        const orderbook = await this.fetchOrderbook();
+                        if (orderbook) {
+                            const currentBid = orderbook.bestBid;
+                            const priceDiff = Math.abs(currentBid - this.pendingMarketSell.limitPrice);
+                            
+                            // Only reprice if price moved significantly (more than 2 ticks)
+                            if (priceDiff > this.config.tickSize * 2) {
+                                this.log(`🔄 Repricing fallback limit sell: ${this.pendingMarketSell.limitPrice} → ${currentBid}`, 'warning');
+                                
+                                await this.cancelOrder(this.pendingMarketSell.orderId);
+                                const newLimitPrice = this.roundToTick(currentBid);
+                                const newOrderId = await this.placeLimitOrder('Sell', newLimitPrice, this.pendingMarketSell.qty);
+                                
+                                if (newOrderId) {
+                                    this.pendingMarketSell.orderId = newOrderId;
+                                    this.pendingMarketSell.timestamp = Date.now();
+                                    this.pendingMarketSell.limitPrice = newLimitPrice;
+                                    this.log(`📤 Repriced limit sell: ${newOrderId} @ ${newLimitPrice}`, 'info');
+                                }
+                            }
+                        }
+                    } else {
+                        this.log(`⏳ Waiting for fallback limit sell to fill... (${limitElapsed.toFixed(1)}s) @ ${this.pendingMarketSell.limitPrice}`, 'info');
+                    }
+                } else {
+                    this.log(`⏳ Waiting for market sell to fill... (${elapsed.toFixed(1)}s)`, 'info');
+                }
             }
         } catch (error) {
             this.log(`Error checking market sell status: ${error.message}`, 'error');
+        }
+    }
+    
+    // Helper: Create fallback TP when market sell fails completely
+    async createFallbackTP() {
+        if (!this.pendingNewTP) return;
+        
+        const tpPrice = this.roundToTick(this.pendingNewTP.buyPrice + (this.config.tpTicks * this.config.tickSize));
+        const orderId = await this.placeLimitOrder('Sell', tpPrice, this.pendingNewTP.qty);
+        
+        if (orderId) {
+            this.stats.totalSellOrdersCreated++;
+            
+            this.activeSellTPOrders.push({
+                orderId: orderId,
+                price: tpPrice,
+                qty: this.pendingNewTP.qty,
+                buyPrice: this.pendingNewTP.buyPrice,
+                timestamp: Date.now()
+            });
+            
+            this.stats.pendingPositions.push({
+                orderId: orderId,
+                buyPrice: this.pendingNewTP.buyPrice,
+                qty: this.pendingNewTP.qty,
+                sellPrice: tpPrice
+            });
+            
+            this.log(`✅ Fallback TP created @ ${tpPrice}`, 'success');
         }
     }
 
