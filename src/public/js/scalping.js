@@ -4,7 +4,7 @@
 class ScalpingBot {
     constructor() {
         this.isRunning = false;
-        this.isPaused = false;  // New: Paused state (no new buys, but TP orders still monitored)
+        this.isPaused = false;  // Paused state (no new buys, but TP orders still monitored)
         this.config = {};
         this.activeBuyOrders = [];
         this.activeSellTPOrders = [];
@@ -39,6 +39,7 @@ class ScalpingBot {
         this.log('Bot initialized with config', 'info');
         this.log(`Symbol: ${config.symbol}, Tick Size: ${config.tickSize}`, 'info');
         this.log(`Wait After Buy Fill: ${config.waitAfterBuyFill}ms`, 'info');
+        this.log(`Sell All On Stop: ${config.sellAllOnStop ? 'YES' : 'NO'}`, 'info');
     }
 
     // Reset statistics
@@ -86,8 +87,8 @@ class ScalpingBot {
         return totalQty > 0 ? totalValue / totalQty : 0;
     }
 
-        // Calculate total pending quantity
-        calculateTotalPendingQty() {
+    	// Calculate total pending quantity
+    	calculateTotalPendingQty() {
         let totalQty = 0;
         for (let position of this.stats.pendingPositions) {
             totalQty += position.qty;
@@ -103,6 +104,7 @@ class ScalpingBot {
         }
 
         this.isRunning = true;
+        this.isPaused = false;  // Ensure paused is reset on start
         this.updateStatus('running');
         this.log('🚀 Bot started', 'success');
 
@@ -256,23 +258,156 @@ class ScalpingBot {
             return;
         }
 
+        // First, stop the loop immediately
         this.isRunning = false;
         this.isPaused = false;
-        clearTimeout(this.loopInterval);
+        
+        if (this.loopInterval) {
+            clearTimeout(this.loopInterval);
+            this.loopInterval = null;
+        }
+        
+        this.log('⏹️ Stopping bot...', 'warning');
+        this.updateStatus('stopping');
+
+        // Cancel all buy orders first
+        for (const order of this.activeBuyOrders) {
+            await this.cancelOrder(order.orderId);
+            this.stats.totalBuyOrdersCanceled++;
+            this.log(`Canceled buy order ${order.orderId}`, 'info');
+        }
+        this.activeBuyOrders = [];
+
+        // Handle TP orders based on sellAllOnStop option
+        if (this.config.sellAllOnStop && this.activeSellTPOrders.length > 0) {
+            this.log('💰 Sell All On Stop enabled - Selling all positions at market...', 'warning');
+            await this.sellAllAtMarket();
+        } else {
+            // Cancel all TP orders (original behavior)
+            await this.cancelAllTPOrders();
+        }
+
         this.updateStatus('stopped');
         this.log('⏹️ Bot stopped', 'warning');
+    }
 
-        await this.cancelAllOrders();
+    // Sell all pending positions at market price
+    async sellAllAtMarket() {
+        if (this.activeSellTPOrders.length === 0) {
+            this.log('No TP orders to sell', 'info');
+            return;
+        }
+
+        // Get current orderbook for best ask price
+        const orderbook = await this.fetchOrderbook();
+        if (!orderbook) {
+            this.log('❌ Failed to fetch orderbook for market sell, canceling TP orders instead', 'error');
+            await this.cancelAllTPOrders();
+            return;
+        }
+
+        const bestAsk = orderbook.bestAsk;
+        this.log(`📊 Best Ask Price: ${bestAsk}`, 'info');
+
+        // Process each TP order
+        for (const order of this.activeSellTPOrders) {
+            try {
+                // Cancel the existing TP limit order first
+                await this.cancelOrder(order.orderId);
+                this.stats.totalSellOrdersCanceled++;
+                this.log(`Canceled TP order ${order.orderId}`, 'info');
+
+                // Place market sell order
+                this.log(`🔴 Selling ${order.qty} at market (ask: ${bestAsk})...`, 'warning');
+                const sellOrderId = await this.placeMarketOrder('Sell', order.qty);
+
+                if (sellOrderId) {
+                    // Calculate profit/loss based on best ask (approximation)
+                    const profitLoss = (bestAsk - order.buyPrice) * order.qty;
+                    this.stats.realProfit += profitLoss;
+                    this.stats.totalSellOrdersFilled++;
+
+                    const profitStr = profitLoss >= 0 ? `+${profitLoss.toFixed(6)}` : profitLoss.toFixed(6);
+                    this.log(`💰 Market sold ${order.qty} @ ~${bestAsk}, P/L: ${profitStr} USDT`, profitLoss >= 0 ? 'success' : 'error');
+
+                    // Remove from pending positions
+                    const pendingIndex = this.stats.pendingPositions.findIndex(p => p.orderId === order.orderId);
+                    if (pendingIndex !== -1) {
+                        this.stats.pendingPositions.splice(pendingIndex, 1);
+                    }
+                } else {
+                    this.log(`❌ Failed to market sell for TP order ${order.orderId}`, 'error');
+                }
+            } catch (error) {
+                this.log(`Error selling TP order ${order.orderId}: ${error.message}`, 'error');
+            }
+        }
+
+        this.activeSellTPOrders = [];
+        this.log(`📊 Final Real Profit: ${this.stats.realProfit >= 0 ? '+' : ''}${this.stats.realProfit.toFixed(6)} USDT`, 
+            this.stats.realProfit >= 0 ? 'success' : 'error');
+    }
+
+    // Cancel all TP orders without selling
+    async cancelAllTPOrders() {
+        for (const order of this.activeSellTPOrders) {
+            await this.cancelOrder(order.orderId);
+            this.stats.totalSellOrdersCanceled++;
+
+            // Remove from pending positions
+            const pendingIndex = this.stats.pendingPositions.findIndex(p => p.orderId === order.orderId);
+            if (pendingIndex !== -1) {
+                this.stats.pendingPositions.splice(pendingIndex, 1);
+            }
+        }
+        this.activeSellTPOrders = [];
+    }
+
+    // Place market order
+    async placeMarketOrder(side, qty) {
+        try {
+            const response = await fetch('/api/order/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    apiKey: this.config.apiKey,
+                    apiSecret: this.config.apiSecret,
+                    category: this.config.category,
+                    symbol: this.config.symbol,
+                    side: side,
+                    orderType: 'Market',
+                    qty: qty.toString()
+                })
+            });
+
+            const data = await response.json();
+            
+            if (data.success) {
+                return data.data.orderId;
+            } else {
+                this.log(`Market order failed: ${data.message}`, 'error');
+                return null;
+            }
+        } catch (error) {
+            this.log(`Market order error: ${error.message}`, 'error');
+            return null;
+        }
     }
 
     // Pause the bot - cancel buy orders but keep TP orders
     async pause() {
-        if (!this.isRunning || this.isPaused) {
+        if (!this.isRunning) {
+            this.log('⚠️ Bot is not running, cannot pause', 'warning');
+            return;
+        }
+        
+        if (this.isPaused) {
+            this.log('⚠️ Bot is already paused', 'warning');
             return;
         }
 
         this.isPaused = true;
-        this.log('⏸️ Bot paused - Canceling buy orders, keeping TP orders...', 'warning');
+        this.log('⏸️ Bot pausing - Canceling buy orders, keeping TP orders...', 'warning');
 
         // Cancel all active buy orders
         for (const order of this.activeBuyOrders) {
@@ -288,7 +423,13 @@ class ScalpingBot {
 
     // Resume the bot from paused state
     async resume() {
-        if (!this.isRunning || !this.isPaused) {
+        if (!this.isRunning) {
+            this.log('⚠️ Bot is not running, cannot resume', 'warning');
+            return;
+        }
+        
+        if (!this.isPaused) {
+            this.log('⚠️ Bot is not paused, cannot resume', 'warning');
             return;
         }
 
@@ -328,9 +469,12 @@ class ScalpingBot {
 
         this.updateStatus(this.isPaused ? 'paused' : 'running');
 
-        this.loopInterval = setTimeout(() => {
-            this.runMainLoop();
-        }, this.config.loopInterval);
+        // Only schedule next loop if still running
+        if (this.isRunning) {
+            this.loopInterval = setTimeout(() => {
+                this.runMainLoop();
+            }, this.config.loopInterval);
+        }
     }
 
     // Fetch orderbook data
@@ -473,8 +617,7 @@ class ScalpingBot {
                 
                 // Adjust new price UP by layerStepTicks to make it unique (closer to best bid)
                 const adjustment = this.config.layerStepTicks * this.config.tickSize;
-                buyPrice = buyPrice + adjustment;
-                //buyPrice = Math.round(buyPrice / this.config.tickSize) * this.config.tickSize;
+                buyPrice = this.roundToTick(buyPrice + adjustment);
                 
                 this.log(`Layer ${layer} price conflict with Layer ${conflictOrder.layer}, adjusted UP to ${buyPrice}`, 'warning');
                 
@@ -545,9 +688,63 @@ class ScalpingBot {
 
     // Create SELL take-profit order
     async createSellTPOrder(buyPrice, qty) {
+        // FIX #1: If max TP orders reached, cancel highest TP and create new one based on last buy
         if (this.activeSellTPOrders.length >= this.config.maxSellTPOrders) {
-            this.log('Max TP orders reached, skipping', 'warning');
-            return;
+            this.log(`⚠️ Max TP orders (${this.config.maxSellTPOrders}) reached. Canceling highest TP order...`, 'warning');
+            
+            // Find the highest TP price order (furthest from current price)
+            let highestTPIndex = 0;
+            let highestTPPrice = this.activeSellTPOrders[0].price;
+            
+            for (let i = 1; i < this.activeSellTPOrders.length; i++) {
+                if (this.activeSellTPOrders[i].price > highestTPPrice) {
+                    highestTPPrice = this.activeSellTPOrders[i].price;
+                    highestTPIndex = i;
+                }
+            }
+            
+            const highestOrder = this.activeSellTPOrders[highestTPIndex];
+            this.log(`🔄 Canceling highest TP order @ ${highestOrder.price} (buy: ${highestOrder.buyPrice})`, 'warning');
+            
+            // Cancel the highest TP order
+            await this.cancelOrder(highestOrder.orderId);
+            this.stats.totalSellOrdersCanceled++;
+            
+            // Remove from pending positions
+            const pendingIndex = this.stats.pendingPositions.findIndex(p => p.orderId === highestOrder.orderId);
+            if (pendingIndex !== -1) {
+                this.stats.pendingPositions.splice(pendingIndex, 1);
+            }
+            
+            // Remove from active sell TP orders
+            this.activeSellTPOrders.splice(highestTPIndex, 1);
+            
+            // Now we need to create a new TP based on the CURRENT buy order (buyPrice passed in)
+            // AND also recreate a TP for the canceled order's buy price
+            // We'll create the new TP for current buy, and the old position's TP
+            
+            // Create TP for the old canceled position (re-queue it)
+            const oldTPPrice = this.roundToTick(highestOrder.buyPrice + (this.config.tpTicks * this.config.tickSize));
+            this.log(`🔄 Re-creating TP for old position @ ${oldTPPrice} (buy: ${highestOrder.buyPrice})`, 'info');
+            
+            const oldOrderId = await this.placeLimitOrder('Sell', oldTPPrice, highestOrder.qty);
+            if (oldOrderId) {
+                this.stats.totalSellOrdersCreated++;
+                this.activeSellTPOrders.push({
+                    orderId: oldOrderId,
+                    price: oldTPPrice,
+                    qty: highestOrder.qty,
+                    buyPrice: highestOrder.buyPrice,
+                    timestamp: Date.now()
+                });
+                
+                this.stats.pendingPositions.push({
+                    orderId: oldOrderId,
+                    buyPrice: highestOrder.buyPrice,
+                    qty: highestOrder.qty,
+                    sellPrice: oldTPPrice
+                });
+            }
         }
 
         const tpPrice = this.roundToTick(buyPrice + (this.config.tpTicks * this.config.tickSize));
@@ -663,8 +860,6 @@ class ScalpingBot {
                 let orderStatus = order.orderStatus;
                 let cumExecQty = parseFloat(order.cumExecQty || 0);
                 
-                //this.log(`Order ${orderId} status: ${orderStatus}, filled: ${cumExecQty}`, 'info');
-                
                 const result = {
                     filled: orderStatus === 'Filled',
                     partiallyFilled: orderStatus === 'PartiallyFilled',
@@ -709,7 +904,7 @@ class ScalpingBot {
         }
     }
 
-    // Cancel all active orders
+    // Cancel all active orders (legacy - now split into separate methods)
     async cancelAllOrders() {
         this.log('Canceling all active orders...', 'warning');
         
@@ -737,9 +932,10 @@ class ScalpingBot {
     updateStatus(status) {
         const statusEl = document.getElementById('scalpStatus');
         
-        if (status === 'running' || status === 'paused') {
+        if (status === 'running' || status === 'paused' || status === 'stopping') {
             statusEl.classList.add('running');
             if (status === 'paused') {
+                statusEl.classList.remove('paused');
                 statusEl.classList.add('paused');
             } else {
                 statusEl.classList.remove('paused');
@@ -758,12 +954,23 @@ class ScalpingBot {
                 return prefix + formatted;
             };
             
-            const statusText = status === 'paused' ? 'Bot Paused (TP Active)' : 'Bot Running';
-            const statusColor = status === 'paused' ? '#8b5cf6' : '#10b981';
+            let statusText = 'Bot Running';
+            let statusColor = '#10b981';
+            let statusColor2 = '#059669';
+            
+            if (status === 'paused') {
+                statusText = 'Bot Paused (TP Active)';
+                statusColor = '#8b5cf6';
+                statusColor2 = '#7c3aed';
+            } else if (status === 'stopping') {
+                statusText = 'Stopping...';
+                statusColor = '#f59e0b';
+                statusColor2 = '#d97706';
+            }
             
             statusEl.innerHTML = `
                 <div class="status-running">
-                    <div class="status-header-main" style="background: linear-gradient(135deg, ${statusColor}, ${status === 'paused' ? '#7c3aed' : '#059669'});">
+                    <div class="status-header-main" style="background: linear-gradient(135deg, ${statusColor}, ${statusColor2});">
                         <span class="status-dot" style="${status === 'paused' ? 'animation: none; background: #fbbf24;' : ''}"></span>
                         <span class="status-text">${statusText}</span>
                     </div>
@@ -936,6 +1143,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Function to reset button states
+    function resetButtonStates() {
+        startBtn.style.display = 'block';
+        stopBtn.style.display = 'none';
+        pauseBtn.style.display = 'none';
+        resumeBtn.style.display = 'none';
+        updateClearStatsBtn();
+    }
+
     if (startBtn) {
         startBtn.addEventListener('click', async function() {
             const config = getScalpingConfig();
@@ -961,13 +1177,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (stopBtn) {
         stopBtn.addEventListener('click', async function() {
+            // Disable buttons during stop process
+            stopBtn.disabled = true;
+            pauseBtn.disabled = true;
+            resumeBtn.disabled = true;
+            
             await scalpingBot.stop();
             
-            startBtn.style.display = 'block';
-            stopBtn.style.display = 'none';
-            pauseBtn.style.display = 'none';
-            resumeBtn.style.display = 'none';
-            updateClearStatsBtn();
+            // Re-enable and reset button states
+            stopBtn.disabled = false;
+            pauseBtn.disabled = false;
+            resumeBtn.disabled = false;
+            resetButtonStates();
         });
     }
 
@@ -1035,7 +1256,8 @@ function getScalpingConfig() {
         maxSellTPOrders: parseInt(document.getElementById('scalpMaxSellTPOrders').value),
         orderQty: parseFloat(document.getElementById('scalpOrderQty').value),
         loopInterval: parseInt(document.getElementById('scalpLoopInterval').value),
-        waitAfterBuyFill: parseInt(document.getElementById('scalpWaitAfterBuyFill').value) || 0
+        waitAfterBuyFill: parseInt(document.getElementById('scalpWaitAfterBuyFill').value) || 0,
+        sellAllOnStop: document.getElementById('scalpSellAllOnStop')?.checked || false
     };
 }
 
