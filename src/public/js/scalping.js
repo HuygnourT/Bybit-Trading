@@ -11,6 +11,11 @@ class ScalpingBot {
         this.loopInterval = null;
         this.lastBuyFillTime = 0;  // Track when last buy was filled (for wait delay)
         
+        // Market sell tracking (when max TP reached)
+        this.isWaitingForMarketSell = false;  // Flag to stop buy orders
+        this.pendingMarketSell = null;        // Track the market sell order
+        this.pendingNewTP = null;             // Store the new TP to create after market sell fills
+        
         // Enhanced statistics tracking
         this.stats = {
             // Buy order stats
@@ -55,6 +60,11 @@ class ScalpingBot {
             totalFees: 0,
             pendingPositions: []
         };
+        
+        // Reset market sell tracking
+        this.isWaitingForMarketSell = false;
+        this.pendingMarketSell = null;
+        this.pendingNewTP = null;
     }
 
     // Calculate estimated profit (pending + completed)
@@ -443,23 +453,39 @@ class ScalpingBot {
         if (!this.isRunning) return;
 
         try {
+            // First, check if we're waiting for a market sell to complete
+            if (this.isWaitingForMarketSell && this.pendingMarketSell) {
+                await this.checkMarketSellStatus();
+            }
+            
             const orderbook = await this.fetchOrderbook();
             
             if (orderbook) {
                 const bestBid = orderbook.bestBid;
                 const bestAsk = orderbook.bestAsk;
 
-                this.log(`Orderbook: Bid=${bestBid}, Ask=${bestAsk}`, 'info');
+                this.log(`Orderbook: Bid=${bestBid}, Ask=${bestAsk}${this.isWaitingForMarketSell ? ' [⏳ WAITING FOR MARKET SELL]' : ''}`, 'info');
 
-                // Only manage buy orders if not paused
-                if (!this.isPaused) {
+                // Only manage buy orders if not paused AND not waiting for market sell
+                if (!this.isPaused && !this.isWaitingForMarketSell) {
                     await this.updateBuyOrders(bestBid);
                     await this.createBuyOrders(bestBid);
+                } else if (this.isWaitingForMarketSell) {
+                    this.log('🛑 Buy orders stopped - Waiting for market sell to fill...', 'warning');
+                    // Cancel any existing buy orders while waiting
+                    if (this.activeBuyOrders.length > 0) {
+                        this.log(`Canceling ${this.activeBuyOrders.length} active buy orders...`, 'warning');
+                        for (const order of this.activeBuyOrders) {
+                            await this.cancelOrder(order.orderId);
+                            this.stats.totalBuyOrdersCanceled++;
+                        }
+                        this.activeBuyOrders = [];
+                    }
                 } else {
                     this.log('⏸️ Paused - Skipping buy order management', 'info');
                 }
                 
-                // Always monitor TP orders (even when paused)
+                // Always monitor TP orders (even when paused or waiting)
                 await this.updateSellTPOrders();
             }
 
@@ -467,7 +493,11 @@ class ScalpingBot {
             this.log(`Loop error: ${error.message}`, 'error');
         }
 
-        this.updateStatus(this.isPaused ? 'paused' : 'running');
+        let displayStatus = this.isPaused ? 'paused' : 'running';
+        if (this.isWaitingForMarketSell) {
+            displayStatus = 'waiting_market_sell';
+        }
+        this.updateStatus(displayStatus);
 
         // Only schedule next loop if still running
         if (this.isRunning) {
@@ -675,8 +705,8 @@ class ScalpingBot {
         return layerPrice;
     }
 
-    // Round price to tick size
-    roundToTick(price) {
+    	// Round price to tick size
+    	roundToTick(price) {
         const tickSize = this.config.tickSize;
         // Calculate decimal places from tick size
         const tickStr = tickSize.toString();
@@ -688,9 +718,13 @@ class ScalpingBot {
 
     // Create SELL take-profit order
     async createSellTPOrder(buyPrice, qty) {
-        // FIX #1: If max TP orders reached, cancel highest TP and create new one based on last buy
+        // If max TP orders reached:
+        // 1. Cancel ONLY the highest TP order (keep all other TPs)
+        // 2. Market sell the canceled position immediately
+        // 3. Stop buy orders until market sell is filled
+        // 4. Then create new TP for the pending buy and resume buy orders
         if (this.activeSellTPOrders.length >= this.config.maxSellTPOrders) {
-            this.log(`⚠️ Max TP orders (${this.config.maxSellTPOrders}) reached. Canceling highest TP order...`, 'warning');
+            this.log(`⚠️ Max TP orders (${this.config.maxSellTPOrders}) reached!`, 'warning');
             
             // Find the highest TP price order (furthest from current price)
             let highestTPIndex = 0;
@@ -704,11 +738,17 @@ class ScalpingBot {
             }
             
             const highestOrder = this.activeSellTPOrders[highestTPIndex];
-            this.log(`🔄 Canceling highest TP order @ ${highestOrder.price} (buy: ${highestOrder.buyPrice})`, 'warning');
+            const remainingTPs = this.activeSellTPOrders.length - 1;
             
-            // Cancel the highest TP order
+            this.log(`🔄 Canceling ONLY highest TP @ ${highestOrder.price} (buy was @ ${highestOrder.buyPrice})`, 'warning');
+            this.log(`📊 Keeping ${remainingTPs} other TP orders active`, 'info');
+            
+            // Cancel ONLY the highest TP order
             await this.cancelOrder(highestOrder.orderId);
             this.stats.totalSellOrdersCanceled++;
+            
+            // Remove ONLY the highest from active sell TP orders (keep all others)
+            this.activeSellTPOrders.splice(highestTPIndex, 1);
             
             // Remove from pending positions
             const pendingIndex = this.stats.pendingPositions.findIndex(p => p.orderId === highestOrder.orderId);
@@ -716,37 +756,40 @@ class ScalpingBot {
                 this.stats.pendingPositions.splice(pendingIndex, 1);
             }
             
-            // Remove from active sell TP orders
-            this.activeSellTPOrders.splice(highestTPIndex, 1);
+            // STOP buy orders and MARKET SELL the canceled position
+            this.isWaitingForMarketSell = true;
+            this.log(`🛑 STOPPING buy orders until market sell completes...`, 'warning');
             
-            // Now we need to create a new TP based on the CURRENT buy order (buyPrice passed in)
-            // AND also recreate a TP for the canceled order's buy price
-            // We'll create the new TP for current buy, and the old position's TP
+            // Store the pending new TP info to create after market sell fills
+            this.pendingNewTP = {
+                buyPrice: buyPrice,
+                qty: qty
+            };
             
-            // Create TP for the old canceled position (re-queue it)
-            const oldTPPrice = this.roundToTick(highestOrder.buyPrice + (this.config.tpTicks * this.config.tickSize));
-            this.log(`🔄 Re-creating TP for old position @ ${oldTPPrice} (buy: ${highestOrder.buyPrice})`, 'info');
+            // Place MARKET SELL for the canceled position
+            this.log(`🔴 MARKET SELLING ${highestOrder.qty} (was TP @ ${highestOrder.price})...`, 'warning');
+            const marketOrderId = await this.placeMarketOrder('Sell', highestOrder.qty);
             
-            const oldOrderId = await this.placeLimitOrder('Sell', oldTPPrice, highestOrder.qty);
-            if (oldOrderId) {
-                this.stats.totalSellOrdersCreated++;
-                this.activeSellTPOrders.push({
-                    orderId: oldOrderId,
-                    price: oldTPPrice,
+            if (marketOrderId) {
+                this.pendingMarketSell = {
+                    orderId: marketOrderId,
                     qty: highestOrder.qty,
-                    buyPrice: highestOrder.buyPrice,
+                    buyPrice: highestOrder.buyPrice,  // Original buy price for P/L calculation
+                    originalTPPrice: highestOrder.price,  // For reference
                     timestamp: Date.now()
-                });
-                
-                this.stats.pendingPositions.push({
-                    orderId: oldOrderId,
-                    buyPrice: highestOrder.buyPrice,
-                    qty: highestOrder.qty,
-                    sellPrice: oldTPPrice
-                });
+                };
+                this.log(`📤 Market sell order placed: ${marketOrderId}`, 'info');
+            } else {
+                // Market sell failed, resume normal operation
+                this.log(`❌ Market sell failed! Resuming normal operation...`, 'error');
+                this.isWaitingForMarketSell = false;
+                this.pendingNewTP = null;
             }
+            
+            return; // Don't create new TP yet, wait for market sell to fill
         }
 
+        // Normal case: Create new TP order for the current buy
         const tpPrice = this.roundToTick(buyPrice + (this.config.tpTicks * this.config.tickSize));
         
         this.log(`Creating SELL TP at ${tpPrice} for ${qty} (profit: ${this.config.tpTicks} ticks)`, 'success');
@@ -773,6 +816,71 @@ class ScalpingBot {
                 qty: qty,
                 sellPrice: tpPrice
             });
+        }
+    }
+    
+    // Check market sell order status
+    async checkMarketSellStatus() {
+        if (!this.pendingMarketSell) return;
+        
+        try {
+            const status = await this.checkOrderStatus(this.pendingMarketSell.orderId);
+            
+            if (status.filled) {
+                // Get current price for P/L calculation (approximate)
+                const orderbook = await this.fetchOrderbook();
+                const sellPrice = orderbook ? orderbook.bestBid : this.pendingMarketSell.buyPrice;
+                
+                const profitLoss = (sellPrice - this.pendingMarketSell.buyPrice) * this.pendingMarketSell.qty;
+                this.stats.realProfit += profitLoss;
+                this.stats.totalSellOrdersFilled++;
+                
+                const profitStr = profitLoss >= 0 ? `+${profitLoss.toFixed(6)}` : profitLoss.toFixed(6);
+                this.log(`💰 Market sell FILLED @ ~${sellPrice}! P/L: ${profitStr} USDT`, profitLoss >= 0 ? 'success' : 'error');
+                
+                // Create pending new TP if not already created by updateSellTPOrders
+                if (this.pendingNewTP) {
+                    this.log(`✅ Creating TP for pending buy @ ${this.pendingNewTP.buyPrice}...`, 'success');
+                    
+                    const tpPrice = this.roundToTick(this.pendingNewTP.buyPrice + (this.config.tpTicks * this.config.tickSize));
+                    const orderId = await this.placeLimitOrder('Sell', tpPrice, this.pendingNewTP.qty);
+                    
+                    if (orderId) {
+                        this.stats.totalSellOrdersCreated++;
+                        
+                        this.activeSellTPOrders.push({
+                            orderId: orderId,
+                            price: tpPrice,
+                            qty: this.pendingNewTP.qty,
+                            buyPrice: this.pendingNewTP.buyPrice,
+                            timestamp: Date.now()
+                        });
+                        
+                        this.stats.pendingPositions.push({
+                            orderId: orderId,
+                            buyPrice: this.pendingNewTP.buyPrice,
+                            qty: this.pendingNewTP.qty,
+                            sellPrice: tpPrice
+                        });
+                        
+                        this.log(`✅ New TP created @ ${tpPrice} (total TPs: ${this.activeSellTPOrders.length})`, 'success');
+                    }
+                } else {
+                    this.log(`ℹ️ Pending TP was already created while waiting`, 'info');
+                }
+                
+                // Resume normal operation
+                this.isWaitingForMarketSell = false;
+                this.pendingMarketSell = null;
+                this.pendingNewTP = null;
+                this.log(`▶️ Resuming buy orders...`, 'success');
+                
+            } else {
+                const elapsed = ((Date.now() - this.pendingMarketSell.timestamp) / 1000).toFixed(1);
+                this.log(`⏳ Waiting for market sell to fill... (${elapsed}s)`, 'info');
+            }
+        } catch (error) {
+            this.log(`Error checking market sell status: ${error.message}`, 'error');
         }
     }
 
@@ -803,6 +911,41 @@ class ScalpingBot {
 
         for (let i = ordersToRemove.length - 1; i >= 0; i--) {
             this.activeSellTPOrders.splice(ordersToRemove[i], 1);
+        }
+        
+        // ✅ NEW: If we're waiting for market sell but a TP just filled,
+        // we now have room - create the pending TP immediately
+        if (this.isWaitingForMarketSell && this.pendingNewTP && ordersToRemove.length > 0) {
+            if (this.activeSellTPOrders.length < this.config.maxSellTPOrders) {
+                this.log(`📊 TP filled while waiting! Creating pending TP now (have room: ${this.activeSellTPOrders.length}/${this.config.maxSellTPOrders})`, 'info');
+                
+                const tpPrice = this.roundToTick(this.pendingNewTP.buyPrice + (this.config.tpTicks * this.config.tickSize));
+                const orderId = await this.placeLimitOrder('Sell', tpPrice, this.pendingNewTP.qty);
+                
+                if (orderId) {
+                    this.stats.totalSellOrdersCreated++;
+                    
+                    this.activeSellTPOrders.push({
+                        orderId: orderId,
+                        price: tpPrice,
+                        qty: this.pendingNewTP.qty,
+                        buyPrice: this.pendingNewTP.buyPrice,
+                        timestamp: Date.now()
+                    });
+                    
+                    this.stats.pendingPositions.push({
+                        orderId: orderId,
+                        buyPrice: this.pendingNewTP.buyPrice,
+                        qty: this.pendingNewTP.qty,
+                        sellPrice: tpPrice
+                    });
+                    
+                    this.log(`✅ Pending TP created @ ${tpPrice}`, 'success');
+                    
+                    // Clear pending (but still wait for market sell to complete)
+                    this.pendingNewTP = null;
+                }
+            }
         }
     }
 
@@ -966,12 +1109,19 @@ class ScalpingBot {
                 statusText = 'Stopping...';
                 statusColor = '#f59e0b';
                 statusColor2 = '#d97706';
+            } else if (status === 'waiting_market_sell') {
+                statusText = '⏳ Waiting for Market Sell...';
+                statusColor = '#ef4444';
+                statusColor2 = '#dc2626';
             }
+            
+            // Determine if buy orders should appear stopped
+            const buyOrdersStopped = status === 'paused' || status === 'waiting_market_sell';
             
             statusEl.innerHTML = `
                 <div class="status-running">
                     <div class="status-header-main" style="background: linear-gradient(135deg, ${statusColor}, ${statusColor2});">
-                        <span class="status-dot" style="${status === 'paused' ? 'animation: none; background: #fbbf24;' : ''}"></span>
+                        <span class="status-dot" style="${buyOrdersStopped ? 'animation: none; background: #fbbf24;' : ''}"></span>
                         <span class="status-text">${statusText}</span>
                     </div>
                     
@@ -1031,11 +1181,22 @@ class ScalpingBot {
                         </div>
                     </div>
                     
+                    ${status === 'waiting_market_sell' && this.pendingMarketSell ? `
+                    <div class="market-sell-status">
+                        <div class="market-sell-header">🔴 Market Sell in Progress</div>
+                        <div class="market-sell-info">
+                            <span>Qty: ${this.pendingMarketSell.qty}</span>
+                            <span>Buy Price: ${this.pendingMarketSell.buyPrice}</span>
+                            <span>Waiting: ${((Date.now() - this.pendingMarketSell.timestamp) / 1000).toFixed(1)}s</span>
+                        </div>
+                    </div>
+                    ` : ''}
+                    
                     <div class="orders-section">
-                        <div class="orders-panel" style="${status === 'paused' ? 'opacity: 0.5;' : ''}">
+                        <div class="orders-panel" style="${buyOrdersStopped ? 'opacity: 0.5;' : ''}">
                             <div class="panel-header">
-                                <span class="panel-icon">${status === 'paused' ? '⏸️' : '🟢'}</span>
-                                <span class="panel-title">Active Buy Orders (${this.activeBuyOrders.length}/${this.config.maxBuyOrders}) ${status === 'paused' ? '- PAUSED' : ''}</span>
+                                <span class="panel-icon">${buyOrdersStopped ? '🛑' : '🟢'}</span>
+                                <span class="panel-title">Active Buy Orders (${this.activeBuyOrders.length}/${this.config.maxBuyOrders}) ${status === 'paused' ? '- PAUSED' : (status === 'waiting_market_sell' ? '- STOPPED' : '')}</span>
                             </div>
                             <div class="orders-list">
                                 ${this.activeBuyOrders.length > 0 ? 
@@ -1047,7 +1208,7 @@ class ScalpingBot {
                                             <span class="order-age">${Math.floor((Date.now() - order.timestamp) / 1000)}s</span>
                                         </div>
                                     `).join('') : 
-                                    `<div class="no-orders">${status === 'paused' ? 'Buy orders paused' : 'No active buy orders'}</div>`
+                                    `<div class="no-orders">${status === 'paused' ? 'Buy orders paused' : (status === 'waiting_market_sell' ? 'Buy orders stopped - waiting for market sell' : 'No active buy orders')}</div>`
                                 }
                             </div>
                         </div>
