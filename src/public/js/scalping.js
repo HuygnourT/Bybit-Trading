@@ -86,8 +86,8 @@ class ScalpingBot {
         return totalQty > 0 ? totalValue / totalQty : 0;
     }
 
-    // Calculate total pending quantity
-    calculateTotalPendingQty() {
+        // Calculate total pending quantity
+        calculateTotalPendingQty() {
         let totalQty = 0;
         for (let position of this.stats.pendingPositions) {
             totalQty += position.qty;
@@ -460,7 +460,7 @@ class ScalpingBot {
             // Calculate price for this layer
             const offsetTicks = this.config.offsetTicks + (layer * this.config.layerStepTicks);
             let buyPrice = bestBid - (offsetTicks * this.config.tickSize);
-            //buyPrice = Math.round(buyPrice / this.config.tickSize) * this.config.tickSize;
+            buyPrice = this.roundToTick(buyPrice);
             
             // Check if this price already exists in active orders
             const conflictIndex = this.activeBuyOrders.findIndex(order => 
@@ -534,7 +534,13 @@ class ScalpingBot {
 
     // Round price to tick size
     roundToTick(price) {
-        return Math.round(price / this.config.tickSize) * this.config.tickSize;
+        const tickSize = this.config.tickSize;
+        // Calculate decimal places from tick size
+        const tickStr = tickSize.toString();
+        const decimalPlaces = tickStr.includes('.') ? tickStr.split('.')[1].length : 0;
+        // Round to tick size and fix floating point precision
+        const rounded = Math.round(price / tickSize) * tickSize;
+        return parseFloat(rounded.toFixed(decimalPlaces));
     }
 
     // Create SELL take-profit order
@@ -544,8 +550,7 @@ class ScalpingBot {
             return;
         }
 
-        //const tpPrice = this.roundToTick(buyPrice + (this.config.tpTicks * this.config.tickSize));
-        const tpPrice = (buyPrice + (this.config.tpTicks * this.config.tickSize));
+        const tpPrice = this.roundToTick(buyPrice + (this.config.tpTicks * this.config.tickSize));
         
         this.log(`Creating SELL TP at ${tpPrice} for ${qty} (profit: ${this.config.tpTicks} ticks)`, 'success');
 
@@ -730,7 +735,7 @@ class ScalpingBot {
 
     // Update status display with enhanced UI
     updateStatus(status) {
-        const statusEl = document.getElementById('arbStatus');
+        const statusEl = document.getElementById('scalpStatus');
         
         if (status === 'running' || status === 'paused') {
             statusEl.classList.add('running');
@@ -917,10 +922,10 @@ const scalpingBot = new ScalpingBot();
 
 // Initialize scalping UI handlers
 document.addEventListener('DOMContentLoaded', function() {
-    const startBtn = document.getElementById('startArbBtn');
-    const stopBtn = document.getElementById('stopArbBtn');
-    const pauseBtn = document.getElementById('pauseArbBtn');
-    const resumeBtn = document.getElementById('resumeArbBtn');
+    const startBtn = document.getElementById('startScalpBtn');
+    const stopBtn = document.getElementById('stopScalpBtn');
+    const pauseBtn = document.getElementById('pauseScalpBtn');
+    const resumeBtn = document.getElementById('resumeScalpBtn');
     const testOrderBtn = document.getElementById('testOrderBtn');
     const clearStatsBtn = document.getElementById('clearStatsBtn');
 
@@ -1020,17 +1025,17 @@ function getScalpingConfig() {
         apiSecret: document.getElementById('apiSecret').value.trim(),
         symbol: document.getElementById('symbol').value.trim(),
         category: document.getElementById('category').value,
-        tickSize: parseFloat(document.getElementById('arbTickSize').value),
-        maxBuyOrders: parseInt(document.getElementById('arbMaxBuyOrders').value),
-        offsetTicks: parseInt(document.getElementById('arbOffsetTicks').value),
-        layerStepTicks: parseInt(document.getElementById('arbLayerStepTicks').value),
-        buyTTL: parseInt(document.getElementById('arbBuyTTL').value),
-        repriceTicks: parseInt(document.getElementById('arbRepriceTicks').value),
-        tpTicks: parseInt(document.getElementById('arbTPTicks').value),
-        maxSellTPOrders: parseInt(document.getElementById('arbMaxSellTPOrders').value),
-        orderQty: parseFloat(document.getElementById('arbOrderQty').value),
-        loopInterval: parseInt(document.getElementById('arbLoopInterval').value),
-        waitAfterBuyFill: parseInt(document.getElementById('arbWaitAfterBuyFill').value) || 0
+        tickSize: parseFloat(document.getElementById('scalpTickSize').value),
+        maxBuyOrders: parseInt(document.getElementById('scalpMaxBuyOrders').value),
+        offsetTicks: parseInt(document.getElementById('scalpOffsetTicks').value),
+        layerStepTicks: parseInt(document.getElementById('scalpLayerStepTicks').value),
+        buyTTL: parseInt(document.getElementById('scalpBuyTTL').value),
+        repriceTicks: parseInt(document.getElementById('scalpRepriceTicks').value),
+        tpTicks: parseInt(document.getElementById('scalpTPTicks').value),
+        maxSellTPOrders: parseInt(document.getElementById('scalpMaxSellTPOrders').value),
+        orderQty: parseFloat(document.getElementById('scalpOrderQty').value),
+        loopInterval: parseInt(document.getElementById('scalpLoopInterval').value),
+        waitAfterBuyFill: parseInt(document.getElementById('scalpWaitAfterBuyFill').value) || 0
     };
 }
 

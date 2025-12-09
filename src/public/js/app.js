@@ -64,21 +64,21 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// Setup mode switching between Single Order and Arbitrage
+// Setup mode switching between Single Order and Scalp
 function setupModeSwitch() {
     const singleModeBtn = document.getElementById('singleModeBtn');
-    const arbitrageModeBtn = document.getElementById('arbitrageModeBtn');
+    const scalpModeBtn = document.getElementById('scalpModeBtn');
     const singleOrderMode = document.getElementById('singleOrderMode');
-    const arbitrageMode = document.getElementById('arbitrageMode');
+    const scalpMode = document.getElementById('scalpMode');
 
     singleModeBtn.addEventListener('click', function() {
         // Switch to Single Order mode
         singleModeBtn.classList.add('active');
-        arbitrageModeBtn.classList.remove('active');
+        scalpModeBtn.classList.remove('active');
         singleOrderMode.classList.add('active');
         singleOrderMode.style.display = 'block';
-        arbitrageMode.classList.remove('active');
-        arbitrageMode.style.display = 'none';
+        scalpMode.classList.remove('active');
+        scalpMode.style.display = 'none';
 
         // Show category selection
         if (categoryGroup) {
@@ -88,12 +88,12 @@ function setupModeSwitch() {
         console.log('Switched to Single Order mode');
     });
 
-    arbitrageModeBtn.addEventListener('click', function() {
-        // Switch to Arbitrage mode
-        arbitrageModeBtn.classList.add('active');
+    scalpModeBtn.addEventListener('click', function() {
+        // Switch to Scalp mode
+        scalpModeBtn.classList.add('active');
         singleModeBtn.classList.remove('active');
-        arbitrageMode.classList.add('active');
-        arbitrageMode.style.display = 'block';
+        scalpMode.classList.add('active');
+        scalpMode.style.display = 'block';
         singleOrderMode.classList.remove('active');
         singleOrderMode.style.display = 'none';
 
@@ -102,7 +102,7 @@ function setupModeSwitch() {
             categoryGroup.style.display = 'none';
         }
         
-        console.log('Switched to Arbitrage mode');
+        console.log('Switched to Scalp mode');
     });
 }
 

@@ -216,34 +216,34 @@ button {
     font-size: 13px;
 }
 
-/* Arbitrage Specific Styles */
-.arb-config-section {
+/* Scalp Specific Styles */
+.scalp-config-section {
     background: #f0f9ff;
     padding: 25px;
     border-radius: 12px;
     border: 2px solid #3b82f6;
 }
 
-.arb-config-section h3 {
+.scalp-config-section h3 {
     color: #1e40af;
     margin-bottom: 20px;
     font-size: 18px;
 }
 
-.arb-grid {
+.scalp-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 15px;
     margin-bottom: 20px;
 }
 
-.arb-controls {
+.scalp-controls {
     display: flex;
     gap: 15px;
     margin-bottom: 20px;
 }
 
-.start-arb-btn {
+.start-scalp-btn {
     flex: 1;
     background: #10b981;
     color: white;
@@ -251,13 +251,13 @@ button {
     letter-spacing: normal;
 }
 
-.start-arb-btn:hover {
+.start-scalp-btn:hover {
     background: #059669;
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(16, 185, 129, 0.3);
 }
 
-.stop-arb-btn {
+.stop-scalp-btn {
     flex: 1;
     background: #ef4444;
     color: white;
@@ -265,13 +265,13 @@ button {
     letter-spacing: normal;
 }
 
-.stop-arb-btn:hover {
+.stop-scalp-btn:hover {
     background: #dc2626;
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(239, 68, 68, 0.3);
 }
 
-.pause-arb-btn {
+.pause-scalp-btn {
     flex: 1;
     background: #8b5cf6;
     color: white;
@@ -279,13 +279,13 @@ button {
     letter-spacing: normal;
 }
 
-.pause-arb-btn:hover {
+.pause-scalp-btn:hover {
     background: #7c3aed;
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(139, 92, 246, 0.3);
 }
 
-.resume-arb-btn {
+.resume-scalp-btn {
     flex: 1;
     background: #06b6d4;
     color: white;
@@ -293,7 +293,7 @@ button {
     letter-spacing: normal;
 }
 
-.resume-arb-btn:hover {
+.resume-scalp-btn:hover {
     background: #0891b2;
     transform: translateY(-2px);
     box-shadow: 0 5px 15px rgba(6, 182, 212, 0.3);
@@ -337,7 +337,7 @@ button {
 }
 
 /* Enhanced Bot Status Styles */
-.arb-status {
+.scalp-status {
     background: white;
     border-radius: 12px;
     margin-bottom: 15px;
@@ -345,7 +345,7 @@ button {
     overflow: hidden;
 }
 
-.arb-status.running {
+.scalp-status.running {
     border-color: #10b981;
 }
 
@@ -670,7 +670,7 @@ button {
 }
 
 /* Logs Styles */
-.arb-logs {
+.scalp-logs {
     background: white;
     border-radius: 8px;
     border: 2px solid #e5e7eb;
@@ -752,12 +752,6 @@ button {
     border: 1px solid #3b82f6;
 }
 
-.response pre {
-    margin-top: 10px;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-}
-
 .info-box {
     background: #dbeafe;
     border-left: 4px solid #3b82f6;
@@ -793,7 +787,7 @@ button {
 
 /* Responsive */
 @media (max-width: 768px) {
-    .arb-grid {
+    .scalp-grid {
         grid-template-columns: 1fr;
     }
     
@@ -823,7 +817,7 @@ button {
         grid-template-columns: 1fr;
     }
     
-    .arb-controls {
+    .scalp-controls {
         flex-direction: column;
     }
 }
